@@ -1,0 +1,16 @@
+iliria
+Copyright 2026 Philip John Basile
+
+iliria is a derivative work of colibri (https://github.com/JustVugg/colibri),
+an open-source project by JustVugg and contributors, licensed under the Apache
+License, Version 2.0. Portions of this software are inherited from colibri and
+remain the copyright of their original authors under that license; this
+distribution does not alter or claim ownership of those portions.
+
+Modifications and additions in iliria — including the M5 Max specialized
+engine and Metal backend generation, iliria-specific modifications to
+PILOT router-lookahead prefetch (PILOT itself originates upstream in
+colibri, not with this fork), the ordered route-trace/cache-simulation
+tooling, the confirmation-matrix benchmark harness, and the iliria
+rebrand — are Copyright 2026 Philip John Basile, licensed under the
+Apache License, Version 2.0.

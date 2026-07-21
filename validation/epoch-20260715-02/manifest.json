@@ -1,0 +1,46 @@
+{
+  "epoch_id": "epoch-20260715-02",
+  "created_utc": "2026-07-16T00:56:10Z",
+  "provenance": {
+    "runtime_source_commit": "0052b7b06d049317daa1c141815ac1bf7c6a42eb",
+    "repository_head_at_freeze": "0052b7b06d049317daa1c141815ac1bf7c6a42eb",
+    "post_runtime_difference": "none (runtime == head)",
+    "authority": "runtime artifact hashes below are the ultimate authority, not the commit ids"
+  },
+  "engine": {
+    "glm_sha256": "280a4e9373bd05a9d030550ef104b6ca1addfddc90366f61cda50a0cb573dbea",
+    "ili_sha256": "d4cbaa499088667ad9266714db1f60dab5cc94ce2d79795fecd23ee018091337",
+    "unchanged_from": "epoch-20260715-01"
+  },
+  "harness": {
+    "run-m5max-fast.sh": "60c1df8e170e239ee828a15650786f68197eef6cfd905b9207da2c37d20bb0c3",
+    "timing_lock.sh": "6a0be060cc968961f3b56849fb2af62a7f9fb5778d1a9e2ee31405b5c58900de",
+    "timing_watchdog.py": "3927e4d1045a02b0bcd5ae418255bc0ef03aff0b5b3fb8c549a58dcb2bb80d0c",
+    "exp_launch.sh": "77e58b5a4501abed0c7018b82adce37a894b342ea66e098c4bac79046d6b3bf8",
+    "quiesce_check.sh": "5d62808cee6c419468f28e6d935ade0eacb656a3eab64885bb64d094f405120f",
+    "roofline_run.sh": "89557a5053c6c342f6f78809a1b9974fa39f9ff978ebd50302345472bb604de2",
+    "run_abba_matrix.sh": "765ea8b30baad397a0c033e2e2cb6337745d5f25bfcc40d45166b03c1fdeb651"
+  },
+  "model": {
+    "dir": "<HOME>/models/GLM-5.2-int4-with-int8-mtp",
+    "identity": {
+      "config.json": {
+        "sha256": "22e49334abf8562fecf70ca3292ba3f5b33f5602fb2bf10b52dd64a66cfe65ff",
+        "bytes": 29464
+      },
+      "generation_config.json": {
+        "sha256": "ac76b43d8683d3b930126870fc8be73d8679308fe752fa1f381096d8354f6a55",
+        "bytes": 194
+      },
+      ".fa_usage": {
+        "sha256": "54160221100e1db25bd8e17ec20bb511296cdb2add690d7c18546e308f472082",
+        "bytes": 200935
+      },
+      ".fa_usage.coding": {
+        "sha256": "252d6143edbe74d678a527c268db1e3580f96f5ab02df1cad7ee666df4238acc",
+        "bytes": 203288
+      }
+    },
+    "note": "weights (~370GB) by config+usage identity; not copied"
+  }
+}

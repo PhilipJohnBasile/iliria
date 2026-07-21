@@ -1,0 +1,37 @@
+{
+ "epoch_id": "epoch-20260717-04",
+ "created_utc": "2026-07-17T04:56:44Z",
+ "source_commit": "02f92b6188ed1a71fee05d57c4e27897854d36de",
+ "suite": "620 tests OK (incl. 5 v3 boundary regressions) on this source",
+ "engine": {
+  "glm_sha256": "0067180b4225bed3d547477ba94002864f378d50091054b0e127e7a895ce817b",
+  "build": "make clean glm METAL=1, clang 21.0.0, reproducible (rebuilt twice identical)"
+ },
+ "v3_proofs": {
+  "numerical_parity": "SCORE logprobs byte-identical delay 0 vs 2000us",
+  "trace_proof": "byte-identical request trace decode-lever 0 vs 2000us",
+  "boundary": "tests/test_stage2_v3_boundary.py 5/5"
+ },
+ "purpose": "Stage-2 v3 causal experiment (the stage-2 v3 registration)",
+ "model": {
+  "config.json": {
+   "sha256": "22e49334abf8562fecf70ca3292ba3f5b33f5602fb2bf10b52dd64a66cfe65ff"
+  },
+  ".fa_usage": {
+   "sha256": "10dbe7c512f98e1a5203495c1f62e7ad0caa7d19d404a268b3fd2a1dedb95932"
+  },
+  ".fa_usage.coding": {
+   "sha256": "252d6143edbe74d678a527c268db1e3580f96f5ab02df1cad7ee666df4238acc"
+  }
+ },
+ "harness": {
+  "ili": "d4cbaa499088667ad9266714db1f60dab5cc94ce2d79795fecd23ee018091337",
+  "run-m5max-fast.sh": "60c1df8e170e239ee828a15650786f68197eef6cfd905b9207da2c37d20bb0c3",
+  "timing_lock.sh": "6a0be060cc968961f3b56849fb2af62a7f9fb5778d1a9e2ee31405b5c58900de",
+  "quiesce_check.sh": "5d62808cee6c419468f28e6d935ade0eacb656a3eab64885bb64d094f405120f",
+  "effective_flags.py": "d70ef9aaaa3513f1eb5fab4e149bf15e1b2e87e36d5bb01e321a95d3fac2dd2c",
+  "engine_run.py": "c67cbe2d82df96eaca8e3b0a14f9bd0f79b2d1e5fef9a2ccc01b084029d61160",
+  "stage2_run.sh": "73cae8c0c8afddf3a86780b7d9f753001e2e49c23fbd8cc690e6a9cac8c895ce",
+  "canary_v3.sh": "3b08064c9e9bc08012cde31ed7a3dbf638b3200b19bec5dc832cd0c5e5aa312e"
+ }
+}

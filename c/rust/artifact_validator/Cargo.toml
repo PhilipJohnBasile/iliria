@@ -1,0 +1,36 @@
+[package]
+name = "artifact_validator"
+version = "0.1.0"
+edition = "2021"
+description = """
+Standalone, std-only, strict parser+validator for iliria's two artifact
+container formats (safetensors headers, Mode-1.5 'MH01' compressed tensor
+blobs) plus a Rust reimplementation of glm.c's int8/int4/int2 format-inference
+ternary. Built to gather migration-trigger evidence for the "Rust owns
+untrusted-input parsing" boundary policy -- see README-equivalent doc comment
+in src/lib.rs. NOT linked into the C engine (no FFI, no cdylib): a read-only
+research/evidence artifact, not a production dependency.
+"""
+publish = false
+# Deliberately NOT part of any workspace: c/ has no root Cargo.toml, and this
+# crate must never accidentally pull in desktop/src-tauri's dependency graph
+# or require network access. Zero [dependencies] below is the actual
+# offline-build guarantee; this comment is just the human-readable version.
+
+[dependencies]
+# INTENTIONALLY EMPTY. std-only by hard requirement (task constraint: the
+# engine's build must stay network-free). Do not add a crate here without
+# first re-checking that constraint with whoever owns this exercise.
+
+[[bin]]
+name = "fuzz_report"
+path = "src/bin/fuzz_report.rs"
+
+[profile.release]
+# Fuzz campaign is CPU-bound byte-shuffling over small (<64KB) buffers;
+# overflow-checks stays ON even in release so the "never panics" claim is
+# tested under the same arithmetic semantics as `cargo test`'s debug build
+# (an overflow that only panics in debug and silently wraps in a normal
+# release build would let a real finding hide when we run the big campaign
+# via `cargo run --release`).
+overflow-checks = true

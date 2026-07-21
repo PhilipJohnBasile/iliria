@@ -1,0 +1,86 @@
+{
+  "harness": "c/bench-m5max/ili-kv-resume-abba/run_kv_resume_abba.py",
+  "purpose": "Same-prompt cold-vs-resume ABBA for ILIRIA's OWN cross-restart .ili_kv KV-resume, replacing the retired, uncitable N=1 142x claim (docs/PERFORMANCE_THEORY.md serve_kv_persistence_ttft_speedup_x) with a bootstrap-CI'd number measured on iliria's own mechanism, not the sibling engine's same-process prompt cache (that is a separate, already-certified 147.8x result on a different engine -- see this repo's REPORT.md).",
+  "started_at": "2026-07-20T17:10:57-0400",
+  "ended_at": "2026-07-20T17:31:24-0400",
+  "model_dir": "<HOME>/models/GLM-5.2-int4-with-int8-mtp",
+  "glm_path": "<repo>/c/glm",
+  "ram_gb_budget": 40.0,
+  "cap": 8,
+  "prompt_chars": 2107,
+  "target_prompt_sha256": "af650654280ccb0d862e3b75e52964237fe897e5adc0eb2193e70caaeba919e8",
+  "timed_max_tokens": 6,
+  "n_per_arm_requested": 5,
+  "n_per_arm_actual": 6,
+  "seed": 20260720,
+  "abba_order": [
+    "cold",
+    "resume",
+    "resume",
+    "cold",
+    "resume",
+    "cold",
+    "cold",
+    "resume",
+    "resume",
+    "cold",
+    "cold",
+    "resume"
+  ],
+  "ttft_definition": "TTFT = wall-clock seconds from immediately-before-subprocess.Popen of the iliria engine (c/glm, invoked with SERVE=1 exactly as openai_server.Engine does) to the harness's own on_text callback's FIRST invocation with non-empty decoded text -- i.e. the moment the first byte of the model's actual generated response is available on the engine's stdout stream. IDENTICAL measurement code (TimedEngine.generate) and definition for both arms; no per-arm special-casing anywhere in this harness.\nINCLUDED inside every trial's timed interval, for both arms alike: process spawn; one-time model-weight load (dense weights + tokenizer + runtime structures); the per-slot .ili_kv disk load performed at startup, BEFORE the engine ever emits its READY sentinel (glm.c serve_ctx_init -> kv_disk_load -- on the resume arm this is where a prior identical-prompt run's KV rows are loaded with 'no re-prefill', read directly off the engine's own stderr; on the cold arm .ili_kv is absent so this step is a silent no-op); receipt of READY; transmission of the \\x02PROMPT frame; the engine's own prefix-match of the incoming prompt against its resident KV history (glm.c run_serve raw_mode: a cache MISS/cold arm means the full chunked prefill over every prompt token, a cache HIT/resume arm means the prefix walk reaches the full prompt length so k=0 new tokens to prefill); and the first decode/sampling step.\nEXCLUDED from every trial in both arms, identically: nothing process-level is excluded -- see the next paragraph for why this is a deliberate, documented departure from the sibling engine's own TTFT_DEFINITION.\nThis is DELIBERATELY DIFFERENT from the sibling engine's kv-resume harness TTFT_DEFINITION, which explicitly EXCLUDES process spawn and model load (the sibling engine holds one process constant across all ABBA trials, never restarting, so 'cold' there means only 'not in this process's cache yet'). iliria's own KV-resume claim is specifically about surviving a full process restart -- excluding process/model-load time here would silently re-introduce the exact ambiguity ('did TTFT include process start? model load? KV load?') that retired the old 142x number in the first place. Both arms restart the engine process fresh for every trial; process spawn and model load are therefore symmetric, paid-in-both-arms costs, deliberately left inside the timed window rather than factored out.",
+  "priming": {
+    "prompt_tokens": 414,
+    "completion_tokens": 6,
+    "ttft_seconds": 168.91499304771423,
+    "generated_text": "It looks like you've provided",
+    "generated_text_sha256": "17dd375e3c9ef614312121f42b6a87028f641d31d108b5e64f8e825a09994787",
+    "clean_exit": true,
+    "primed_kv_path": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/primed.ili_kv",
+    "primed_kv_bytes": 79996600,
+    "disk_nrec_verified": 420,
+    "stderr_log": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/logs/priming-server.log"
+  },
+  "n_trials_scheduled": 12,
+  "n_trials_run": 12,
+  "stopped_early_reason": null,
+  "n_errors": 0,
+  "resume_hit_proof_mismatches": 0,
+  "token_identity": {
+    "cold_unique_sha256": [
+      "17dd375e3c9ef614312121f42b6a87028f641d31d108b5e64f8e825a09994787"
+    ],
+    "resume_unique_sha256": [
+      "17dd375e3c9ef614312121f42b6a87028f641d31d108b5e64f8e825a09994787"
+    ],
+    "token_identical_across_arms": true
+  },
+  "cold_ttft_seconds": {
+    "n": 6,
+    "median": 153.9163156747818,
+    "ci_low": 145.98942255973816,
+    "ci_high": 163.49165046215057,
+    "ci_level": 0.95,
+    "resamples": 10000,
+    "seed": 20260720
+  },
+  "resume_ttft_seconds": {
+    "n": 6,
+    "median": 22.561896324157715,
+    "ci_low": 19.18235194683075,
+    "ci_high": 30.968958497047424,
+    "ci_level": 0.95,
+    "resamples": 10000,
+    "seed": 20260720
+  },
+  "speedup_cold_over_resume": {
+    "n_cold": 6,
+    "n_resume": 6,
+    "point_estimate": 6.82195829035784,
+    "ci_low": 4.976952598405827,
+    "ci_high": 8.023850052454668,
+    "ci_level": 0.95,
+    "resamples": 10000,
+    "seed": 20260720
+  },
+  "trials_jsonl": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/trials.jsonl"
+}

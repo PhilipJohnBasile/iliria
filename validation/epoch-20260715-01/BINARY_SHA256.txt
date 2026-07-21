@@ -1,0 +1,5 @@
+# Binary not redistributed in this release (large; embeds pre-rename name).
+# Recorded sha256 + commit below document what was frozen; rebuild from git_commit to verify.
+glm sha256 (recorded; binary not redistributed): 280a4e9373bd05a9d030550ef104b6ca1addfddc90366f61cda50a0cb573dbea
+git_commit=19a50d01a658f5fa8b6fbf8bdda49525665f187e
+frozen 17:35:36

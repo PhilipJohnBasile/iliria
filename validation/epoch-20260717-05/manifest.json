@@ -1,0 +1,15 @@
+{
+ "epoch_id": "epoch-20260717-05",
+ "created_utc": "2026-07-17T14:23:14Z",
+ "source_commit": "087214ada9f97527865e605f1ea81a83ff85600f",
+ "suite": "626 tests OK (620 + 6 v4 snapshot regressions)",
+ "engine": {
+  "glm_sha256": "29a96d5e18313e92ed4069d1965ce5629f7ad0e892f7ee5cdb55421d2f9b23ac",
+  "build": "make clean glm METAL=1, reproducible"
+ },
+ "v4_proofs": {
+  "numerical_parity": "live-prefill vs snapshot-restore argmax-hash BYTE-IDENTICAL (1b4e675e1d333a48, fixture)",
+  "boundary": "test_stage2_v3_boundary 5/5 + test_stage2_v4_snapshot 6/6"
+ },
+ "purpose": "Stage-2 v4 causal experiment via immutable 8K KV snapshots (the stage-2 v4 registration)"
+}

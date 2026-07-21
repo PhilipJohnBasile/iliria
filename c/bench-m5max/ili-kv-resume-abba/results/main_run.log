@@ -1,0 +1,24 @@
+priming: prompt_chars=2107 sha256=af650654280ccb0d...
+  primed in 180.3s wall -- prompt_tokens=414 completion_tokens=6 ttft=168.91s disk_nrec_verified=420
+
+full ABBA run: n_per_arm=6 (requested 5), blocks=3, order=CRRCRCCRRCCR, max_wall_seconds=2700
+  [  0] block= 0 arm=cold   ok   ttft= 167.85s  load=  4.23s  matches_expectation=True  contended=True  wall=179.1s  total_elapsed=179s
+  [  1] block= 0 arm=resume ok   ttft=  32.60s  load=  4.16s  matches_expectation=True  contended=True  wall=49.1s  total_elapsed=228s
+  [  2] block= 0 arm=resume ok   ttft=  29.33s  load=  4.70s  matches_expectation=True  contended=True  wall=39.8s  total_elapsed=268s
+  [  3] block= 0 arm=cold   ok   ttft= 159.14s  load=  4.06s  matches_expectation=True  contended=True  wall=169.6s  total_elapsed=438s
+  [  4] block= 1 arm=resume ok   ttft=  17.39s  load=  3.95s  matches_expectation=True  contended=True  wall=24.6s  total_elapsed=462s
+  [  5] block= 1 arm=cold   ok   ttft= 154.03s  load=  3.89s  matches_expectation=True  contended=True  wall=164.2s  total_elapsed=626s
+  [  6] block= 1 arm=cold   ok   ttft= 139.55s  load=  3.96s  matches_expectation=True  contended=True  wall=151.7s  total_elapsed=778s
+  [  7] block= 1 arm=resume ok   ttft=  24.08s  load=  3.97s  matches_expectation=True  contended=True  wall=45.4s  total_elapsed=824s
+  [  8] block= 2 arm=resume ok   ttft=  21.04s  load=  4.37s  matches_expectation=True  contended=True  wall=38.2s  total_elapsed=862s
+  [  9] block= 2 arm=cold   ok   ttft= 152.43s  load=  4.09s  matches_expectation=True  contended=True  wall=160.8s  total_elapsed=1023s
+  [ 10] block= 2 arm=cold   ok   ttft= 153.80s  load=  4.09s  matches_expectation=True  contended=True  wall=165.8s  total_elapsed=1188s
+  [ 11] block= 2 arm=resume ok   ttft=  20.97s  load=  4.02s  matches_expectation=True  contended=True  wall=38.6s  total_elapsed=1227s
+
+==============================================================================
+cold   median= 153.92s  CI=[ 145.99,  163.49]s  n=6
+resume median=  22.56s  CI=[  19.18,   30.97]s  n=6
+speedup (cold/resume) = 6.8x  CI=[5.0x, 8.0x]
+token-identical across arms: True
+
+full results at <repo>/c/bench-m5max/ili-kv-resume-abba/results/kv_resume_abba_results.json

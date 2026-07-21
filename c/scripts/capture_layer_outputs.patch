@@ -1,0 +1,79 @@
+diff --git a/c/glm.c b/c/glm.c
+index c68d6af..9b00d45 100644
+--- a/c/glm.c
++++ b/c/glm.c
+@@ -1977,6 +1977,66 @@ static void pilot_prefetch(Model *m, int lnext, const float *x, int S){
+     free(nrm); free(ch);
+ }
+ 
++/* ---- M5 per-layer output capture (opt-in, L2 numerical validation) -----------
++ * ILI_LAYER_CAPTURE_DIR=/path/dir: for every layer_forward() call whose layer is
++ * listed in ILI_LAYER_CAPTURE_LAYERS (comma-separated; unset = every layer, NOT
++ * recommended outside tiny S/T -- see scripts/capture_layer_outputs.md), write the
++ * pre-residual attention output (the S*D float32 `tmp` buffer immediately after the
++ * attention() call, before the residual add two lines below) as its own file
++ * L<layer>_S<S>_T<pos_base>.bin inside the directory. Fixed 32-byte little-endian
++ * header + raw float32 payload; tools/compare_layer_captures.py reads it. Zero
++ * overhead when the env var is unset: one cached check, no allocation on the hot
++ * path. The capture point is identical for the CPU and Metal-prefill paths (both
++ * write into the same `tmp` buffer before attention() returns -- see
++ * scripts/capture_layer_outputs.md for why), so this ONE hook covers
++ * ILI_METAL_PREFILL=0 and =1; point it at two different directories to capture
++ * both sides of the comparison. */
++typedef struct { int enabled, initialized; int layers[256], nlayers; char dir[900]; } M5LayerCapture;
++static M5LayerCapture g_m5_capture;
++static void m5_capture_init(void){
++    if(g_m5_capture.initialized) return;
++    g_m5_capture.initialized=1;
++    const char *dir=ili_env("LAYER_CAPTURE_DIR");
++    if(!dir||!*dir) return;
++    snprintf(g_m5_capture.dir,sizeof g_m5_capture.dir,"%s",dir);
++    const char *layers=ili_env("LAYER_CAPTURE_LAYERS");
++    if(layers && *layers){
++        char buf[2048]; snprintf(buf,sizeof buf,"%s",layers);
++        char *tok=strtok(buf,",");
++        while(tok && g_m5_capture.nlayers<256){
++            g_m5_capture.layers[g_m5_capture.nlayers++]=atoi(tok);
++            tok=strtok(NULL,",");
++        }
++    }
++    g_m5_capture.enabled=1;
++    fprintf(stderr,"[layer-capture] enabled: dir=%s layers=%s\n",dir,layers?layers:"(all)");
++}
++static int m5_capture_layer_selected(int layer){
++    if(g_m5_capture.nlayers==0) return 1;    /* no filter given: capture every layer */
++    for(int i=0;i<g_m5_capture.nlayers;i++) if(g_m5_capture.layers[i]==layer) return 1;
++    return 0;
++}
++static void m5_layer_capture_maybe_dump(int layer,int S,int pos_base,int D,const float *tmp){
++    m5_capture_init();
++    if(!g_m5_capture.enabled || !m5_capture_layer_selected(layer)) return;
++    char path[1024];
++    snprintf(path,sizeof path,"%s/L%03d_S%04d_T%06d.bin",g_m5_capture.dir,layer,S,pos_base);
++    FILE *fp=fopen(path,"wb");
++    if(!fp){ fprintf(stderr,"[layer-capture] cannot open %s\n",path); return; }
++    unsigned char h[32]={0}; memcpy(h,"FACAPT1\0",8);
++    uint32_t v;
++    v=1;                          memcpy(h+8, &v,4);   /* format version */
++    v=(uint32_t)layer;            memcpy(h+12,&v,4);
++    v=(uint32_t)S;                memcpy(h+16,&v,4);
++    v=(uint32_t)pos_base;         memcpy(h+20,&v,4);
++    v=(uint32_t)D;                memcpy(h+24,&v,4);
++    v=(uint32_t)g_metal_prefill;  memcpy(h+28,&v,4);
++    if(fwrite(h,1,sizeof h,fp)!=sizeof h || fwrite(tmp,sizeof(float),(size_t)S*D,fp)!=(size_t)S*D){
++        fprintf(stderr,"[layer-capture] short write on %s\n",path);
++    }
++    fclose(fp);
++}
++
+ /* forward di UN layer (usato dai 78 principali e dal layer MTP) */
+ static void layer_forward(Model *m, Layer *l, int li, float *x, int S, int pos_base, float *nrm, float *tmp){
+     Cfg *c=&m->c; int D=c->hidden;
+@@ -2039,6 +2099,7 @@ static void layer_forward(Model *m, Layer *l, int li, float *x, int S, int pos_b
+ #endif
+     for(int s=0;s<S;s++) rmsnorm(nrm+(int64_t)s*D, x+(int64_t)s*D, l->in_ln, D, c->eps);
+     attention(m,l,li,nrm,S,pos_base,tmp);
++    m5_layer_capture_maybe_dump(li,S,pos_base,D,tmp);
+     for(int64_t j=0;j<(int64_t)S*D;j++) x[j]+=tmp[j];
+     if(g_pilot && S<=8 && li+1<c->n_layers && m->L[li+1].sparse) pilot_prefetch(m,li+1,x,S);
+     if(g_looka && S==1 && li+1<c->n_layers && m->L[li+1].sparse) la_predict(m,li+1,x,1);

@@ -1,0 +1,11 @@
+{
+ "epoch_id": "epoch-20260718-07",
+ "created_utc": "2026-07-18T15:18:21Z",
+ "source_commit": "dac28621eb900fe3de9ef1d6ad6cf4656cafd07e",
+ "suite": "green (1 documented skip) on this source",
+ "engine": {
+  "glm_sha256": "46b17a5050ddaabb018d0e21c7e03b5242c7461ed93c8ae66ccfdc45c9028fbe"
+ },
+ "adds": "gate-3 MOE_INPUT_DUMP capture (user-approved, env-gated, parity 1b4e675e receipt)",
+ "purpose": "gate-3 activation capture + downstream gates"
+}

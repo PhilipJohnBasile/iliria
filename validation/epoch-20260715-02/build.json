@@ -1,0 +1,6 @@
+{
+  "runtime_source_commit": "0052b7b06d049317daa1c141815ac1bf7c6a42eb",
+  "glm_sha256": "280a4e9373bd05a9d030550ef104b6ca1addfddc90366f61cda50a0cb573dbea",
+  "generated_metal": "compiled into glm binary; glm sha256 is ground truth",
+  "engine_continuity": "glm sha256==epoch-01 (280a4e93...) -> ENGINE UNCHANGED across all client/harness/tooling work"
+}

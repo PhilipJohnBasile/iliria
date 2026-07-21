@@ -1,0 +1,52 @@
+{
+  "epoch_id": "epoch-20260716-03",
+  "created_utc": "2026-07-16T22:11:22Z",
+  "source_commit": "3f46c833a4b841cb436383c229236075b64088d4",
+  "note": "frozen against the POST-REPAIR pushed commit (contains e11e51f scaffold fixes rows 17-20 and 3f46c83 patcher fixes rows 1-16), NOT bare merge 3265840",
+  "full_suite": "615 tests, OK (0 failures, 0 errors), unittest discover -s tests, 391.5s, this commit",
+  "engine": {
+    "glm_sha256": "8439a5b002c59aef58b77e213fef307216a9014ff8a918a1ab95b521d53a764c",
+    "reverified": "rebuilt from 3265840 earlier today; repairs touched only tools/tests; hash reverified at freeze",
+    "expected": "8439a5b002c59aef58b77e213fef307216a9014ff8a918a1ab95b521d53a764c",
+    "matches_overhead_gate_validated_binary": true
+  },
+  "greedy_parity_receipt": {
+    "test": "tests.test_score_greedy_parity",
+    "result": "OK standalone 14.6s from CLEAN regenerated fixture + this exact binary; also green in the full suite on this commit",
+    "binary_sha256": "8439a5b002c59aef58b77e213fef307216a9014ff8a918a1ab95b521d53a764c"
+  },
+  "effective_flags": "engine prints EFFECTIVE-FLAGS (requested/effective/reason) at startup; captured per-run into manifests via eval_glm.py/provenance; METAL_PREFILL-without-METAL refused by tools/effective_flags.py guard in eval + timing drivers",
+  "gate4": "v1 empirical <1%: INCONCLUSIVE (retained); v2 (same-binary invariant + non-interference + interaction review): APPROVED. Caveat: absolute comparisons vs uninstrumented epochs require overhead caveat",
+  "model": {
+    "dir": "<HOME>/models/GLM-5.2-int4-with-int8-mtp",
+    "identity": {
+      "config.json": {
+        "sha256": "22e49334abf8562fecf70ca3292ba3f5b33f5602fb2bf10b52dd64a66cfe65ff",
+        "bytes": 29464
+      },
+      "generation_config.json": {
+        "sha256": "ac76b43d8683d3b930126870fc8be73d8679308fe752fa1f381096d8354f6a55",
+        "bytes": 194
+      },
+      ".fa_usage": {
+        "sha256": "10dbe7c512f98e1a5203495c1f62e7ad0caa7d19d404a268b3fd2a1dedb95932",
+        "bytes": 203952
+      },
+      ".fa_usage.coding": {
+        "sha256": "252d6143edbe74d678a527c268db1e3580f96f5ab02df1cad7ee666df4238acc",
+        "bytes": 203288
+      }
+    }
+  },
+  "harness": {
+    "run-m5max-fast.sh": "60c1df8e170e239ee828a15650786f68197eef6cfd905b9207da2c37d20bb0c3",
+    "timing_lock.sh": "6a0be060cc968961f3b56849fb2af62a7f9fb5778d1a9e2ee31405b5c58900de",
+    "timing_watchdog.py": "3927e4d1045a02b0bcd5ae418255bc0ef03aff0b5b3fb8c549a58dcb2bb80d0c",
+    "exp_launch.sh": "77e58b5a4501abed0c7018b82adce37a894b342ea66e098c4bac79046d6b3bf8",
+    "quiesce_check.sh": "5d62808cee6c419468f28e6d935ade0eacb656a3eab64885bb64d094f405120f",
+    "roofline_run.sh": "b6bd53ed75ba207b950932a37488805ce7a37a7bda348eda552c2c2f4d7ffc91",
+    "run_abba_matrix.sh": "80d8621c4d676549f383a8c8dc1a0d2e45398e4d14fcb5e9b2dbc5823815f7c5",
+    "effective_flags.py": "d70ef9aaaa3513f1eb5fab4e149bf15e1b2e87e36d5bb01e321a95d3fac2dd2c",
+    "eval_glm.py": "3c54016a3462d0dced90580ecaea9695479f4963f4470b7fda3e6a32fa06c009"
+  }
+}

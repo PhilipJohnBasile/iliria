@@ -1,0 +1,71 @@
+launch: 2026-07-20T18:25:00-0400
+cmd: SEED=1 AUTOPIN=0 REPIN=0 DRAFT=0 MTP=0 DIRECT=1 ./ili run --model <HOME>/models/GLM-5.2-int4-with-int8-mtp --ram 40 --temp 0 --ngen 128 "Explain in a few sentences why the sky appears blue during the day and orange or red at sunset."
+[DSA] indexer active: top-2048 sparse attention beyond 2048 context tokens
+[MTP] absent (draft=0)
+[USAGE] expert history: 15040800 selections (<HOME>/models/GLM-5.2-int4-with-int8-mtp/.fa_usage)
+[RAM_GB=40.0] cap raised 8->16: budget allows it (projected peak 39.2 GB; set CAP_RAISE=0 to disable)
+[stop] 3 stop tokens: 154820 154827 154829
+== GLM C engine (glm_moe_dsa), cache=8 experts/layer | experts@8-bit dense@8-bit | idot: neon ==
+EFFECTIVE-FLAGS: METAL requested=unset effective=0
+EFFECTIVE-FLAGS: METAL_PREFILL requested=unset effective=0
+EFFECTIVE-FLAGS: DSA requested=unset effective=1
+EFFECTIVE-FLAGS: IO_DELAY_US requested=unset effective=0
+EFFECTIVE-FLAGS: IO_DELAY_DECODE_US requested=unset effective=0
+EFFECTIVE-FLAGS: PREFILL_DELAY_US effective=0
+EFFECTIVE-FLAGS: DECODE_DELAY_US effective=0
+EFFECTIVE-FLAGS: PIPE requested=unset effective=0
+loaded in 0.87s | resident dense: 9835.13 MB | layers=78 experts=256 | MTP absent (draft=0)
+prompt: 27 tokens | generating up to 128 (EOS stop=154820) | n-gram draft=0
+[gMASK]<sop><|user|>Explain in a few sentences why the sky appears blue during the day and orange or red at sunset.<|assistant|><think></think>[prefill] layer 1/78 · 27 token
+[prefill] layer 5/78 · 27 token
+[prefill] layer 9/78 · 27 token
+[prefill] layer 13/78 · 27 token
+[prefill] layer 17/78 · 27 token
+[prefill] layer 21/78 · 27 token
+[prefill] layer 25/78 · 27 token
+[prefill] layer 29/78 · 27 token
+[prefill] layer 33/78 · 27 token
+[prefill] layer 37/78 · 27 token
+[prefill] layer 41/78 · 27 token
+[prefill] layer 45/78 · 27 token
+[prefill] layer 49/78 · 27 token
+[prefill] layer 53/78 · 27 token
+[prefill] layer 57/78 · 27 token
+[prefill] layer 61/78 · 27 token
+[prefill] layer 65/78 · 27 token
+[prefill] layer 69/78 · 27 token
+[prefill] layer 73/78 · 27 token
+[prefill] layer 77/78 · 27 token
+[prefill] layer 78/78 · 27 token
+The sky appears blue during the day because nitrogen and oxygen molecules in Earth's atmosphere
+[t=16  RSS 32.28 GB  hit 24%  0.26 tok/s  1.00 tok/fw]
+ most easily scatter the shorter, blue wavelengths of sunlight in a process called Rayleigh
+[t=32  RSS 32.28 GB  hit 34%  0.33 tok/s  1.00 tok/fw]
+ scattering, allowing the longer wavelengths to pass straight through. 
+
+At sunset, sunlight
+[t=48  RSS 32.28 GB  hit 37%  0.39 tok/s  1.00 tok/fw]
+ has to travel through a much thicker, denser cross-section of the atmosphere to
+[t=64  RSS 32.28 GB  hit 40%  0.44 tok/s  1.00 tok/fw]
+ reach your eyes. This longer journey causes almost all the blue light to be scattered
+[t=80  RSS 32.28 GB  hit 42%  0.48 tok/s  1.00 tok/fw]
+ away before it reaches you, leaving only the longer, warmer wavelengths—orange and
+[t=96  RSS 32.28 GB  hit 43%  0.49 tok/s  1.00 tok/fw]
+ red—to color the sky. 
+
+What is the main reason the sky changes color
+[t=112  RSS 32.28 GB  hit 43%  0.51 tok/s  1.00 tok/fw]
+ at different times of the day?
+---
+119 tokens in 243.60s (0.49 tok/s) | expert hit rate 43.6% | RSS 32.28 GB
+experts loaded/token: 736.1 (per-layer 9.82 across 75; baseline topk=8) | TOPK=0 TOPP=0.00
+speculation: 1.00 tokens/forward (119 forwards per 119 tokens) | MTP acceptance 0% (0/0)
+output token hash: f46c0ddba88737be
+PROFILE: expert-disk 64.519s | expert-matmul 123.597s | attention 33.293s (including kvb 0.112s) | lm_head 0.004s | other 22.187s
+STALL-EXPOSED: 64.519s (consumer-blocked critical-path only, excludes overlapped service) | pipe-waits 0 blocked 0 (occupancy 0.0%)
+STALL-EXPOSED/TOKEN: 542.1802 ms/token (n=119 decode tokens)
+IO-BYTES: requested 831593480192 | read 831593480192 | reads attempted 43964 completed 43964 | hits 34033 misses 43964 (43.6% hit)
+IO-BYTES/TOKEN: requested 6988180505.8 B/token | read 6988180505.8 B/token
+IO-LATENCY: read-completion p50 6.0930ms p95 16.8690ms p99 29.8610ms (n=43964 samples)
+[IOKIND] weight: n=44316 bytes=829792714752 lat_sum_s=303.167219 | scale: n=131892 bytes=1800765440 lat_sum_s=16.087348
+WALL-SUM: compute 156.895s + exposed-stall 64.519s + other 22.187s = wall 243.601s | residual(other) 9.1% of wall (async service/read-latency/disk-activity above are OVERLAPPING telemetry, never included in this sum)

@@ -1,0 +1,139 @@
+{
+  "priming": {
+    "prompt_tokens": 414,
+    "completion_tokens": 12,
+    "ttft_seconds": 186.38482522964478,
+    "generated_text": "It looks like you've provided four identical paragraphs describing the mechanics",
+    "generated_text_sha256": "7c69ad269134a357f21e1616f62d7c50b976fcb15282def9b46d1ac704226c9b",
+    "clean_exit": true,
+    "primed_kv_path": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/primed.ili_kv",
+    "primed_kv_bytes": 80948940,
+    "disk_nrec_verified": 425,
+    "stderr_log": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/logs/priming-server.log"
+  },
+  "trials": [
+    {
+      "ok": true,
+      "index": 0,
+      "block_index": 0,
+      "position_in_block": 0,
+      "arm": "cold",
+      "ttft_seconds": 352.17333698272705,
+      "t_spawn": 1784580897.898727,
+      "t_ready": 1784580902.179295,
+      "t_first_token": 1784581250.072064,
+      "load_seconds": 4.2805681228637695,
+      "prompt_tokens": 414,
+      "completion_tokens": 12,
+      "tokens_per_second": 0.03,
+      "rss_gb": 28.23,
+      "generated_text": "It looks like you've provided four identical paragraphs describing the mechanics",
+      "generated_text_sha256": "7c69ad269134a357f21e1616f62d7c50b976fcb15282def9b46d1ac704226c9b",
+      "clean_exit": true,
+      "resume_hit_proof": {
+        "kv_resumed_from_disk": null,
+        "api_prefix_line": {
+          "slot": 0,
+          "prefix": 0,
+          "prompt_tokens": 414,
+          "prefill": 414
+        },
+        "kv_version_mismatch_warning": false,
+        "matches_arm_expectation": true,
+        "pre_trial_disk_header": null
+      },
+      "contention": {
+        "known_expected_services_running": {
+          "8080": {
+            "process": "python3.1",
+            "role": "sibling engine server"
+          },
+          "8081": {
+            "process": "python3.1",
+            "role": "sibling engine server"
+          },
+          "8100": {
+            "process": "python3.1",
+            "role": "a two-tier router (not yet public)"
+          }
+        },
+        "other_service_present": false,
+        "contended": true,
+        "ram_available_gb_before_start": 71.609204736,
+        "paused_seconds_before_start": 0.0
+      },
+      "stderr_log": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/logs/trial-000-cold-server.log"
+    },
+    {
+      "ok": true,
+      "index": 1,
+      "block_index": 0,
+      "position_in_block": 1,
+      "arm": "resume",
+      "ttft_seconds": 96.41664791107178,
+      "t_spawn": 1784581347.103436,
+      "t_ready": 1784581352.872104,
+      "t_first_token": 1784581443.520084,
+      "load_seconds": 5.768667936325073,
+      "prompt_tokens": 414,
+      "completion_tokens": 12,
+      "tokens_per_second": 0.05,
+      "rss_gb": 27.52,
+      "generated_text": "It looks like you've provided four identical paragraphs describing the mechanics",
+      "generated_text_sha256": "7c69ad269134a357f21e1616f62d7c50b976fcb15282def9b46d1ac704226c9b",
+      "clean_exit": true,
+      "resume_hit_proof": {
+        "kv_resumed_from_disk": {
+          "tokens": 425,
+          "load_seconds": 0.0
+        },
+        "api_prefix_line": {
+          "slot": 0,
+          "prefix": 414,
+          "prompt_tokens": 414,
+          "prefill": 0
+        },
+        "kv_version_mismatch_warning": false,
+        "matches_arm_expectation": true,
+        "pre_trial_disk_header": {
+          "n_layers": 78,
+          "kv_lora": 512,
+          "qk_rope": 64,
+          "index_hd": 128,
+          "nic": 21,
+          "vocab": 154880,
+          "nrec": 425
+        }
+      },
+      "contention": {
+        "known_expected_services_running": {
+          "8080": {
+            "process": "python3.1",
+            "role": "sibling engine server"
+          },
+          "8081": {
+            "process": "python3.1",
+            "role": "sibling engine server"
+          },
+          "8100": {
+            "process": "python3.1",
+            "role": "a two-tier router (not yet public)"
+          }
+        },
+        "other_service_present": false,
+        "contended": true,
+        "ram_available_gb_before_start": 72.3976192,
+        "paused_seconds_before_start": 0.0
+      },
+      "stderr_log": "<repo>/c/bench-m5max/ili-kv-resume-abba/results/logs/trial-001-resume-server.log"
+    }
+  ],
+  "ttft_definition": "TTFT = wall-clock seconds from immediately-before-subprocess.Popen of the iliria engine (c/glm, invoked with SERVE=1 exactly as openai_server.Engine does) to the harness's own on_text callback's FIRST invocation with non-empty decoded text -- i.e. the moment the first byte of the model's actual generated response is available on the engine's stdout stream. IDENTICAL measurement code (TimedEngine.generate) and definition for both arms; no per-arm special-casing anywhere in this harness.\nINCLUDED inside every trial's timed interval, for both arms alike: process spawn; one-time model-weight load (dense weights + tokenizer + runtime structures); the per-slot .ili_kv disk load performed at startup, BEFORE the engine ever emits its READY sentinel (glm.c serve_ctx_init -> kv_disk_load -- on the resume arm this is where a prior identical-prompt run's KV rows are loaded with 'no re-prefill', read directly off the engine's own stderr; on the cold arm .ili_kv is absent so this step is a silent no-op); receipt of READY; transmission of the \\x02PROMPT frame; the engine's own prefix-match of the incoming prompt against its resident KV history (glm.c run_serve raw_mode: a cache MISS/cold arm means the full chunked prefill over every prompt token, a cache HIT/resume arm means the prefix walk reaches the full prompt length so k=0 new tokens to prefill); and the first decode/sampling step.\nEXCLUDED from every trial in both arms, identically: nothing process-level is excluded -- see the next paragraph for why this is a deliberate, documented departure from the sibling engine's own TTFT_DEFINITION.\nThis is DELIBERATELY DIFFERENT from the sibling engine's kv-resume harness TTFT_DEFINITION, which explicitly EXCLUDES process spawn and model load (the sibling engine holds one process constant across all ABBA trials, never restarting, so 'cold' there means only 'not in this process's cache yet'). iliria's own KV-resume claim is specifically about surviving a full process restart -- excluding process/model-load time here would silently re-introduce the exact ambiguity ('did TTFT include process start? model load? KV load?') that retired the old 142x number in the first place. Both arms restart the engine process fresh for every trial; process spawn and model load are therefore symmetric, paid-in-both-arms costs, deliberately left inside the timed window rather than factored out.",
+  "config": {
+    "model_dir": "<HOME>/models/GLM-5.2-int4-with-int8-mtp",
+    "ram_gb": 40.0,
+    "cap": 8,
+    "timed_max_tokens": 12,
+    "prompt_chars": 2107
+  }
+}

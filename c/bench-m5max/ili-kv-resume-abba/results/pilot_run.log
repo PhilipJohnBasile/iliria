@@ -1,0 +1,8 @@
+priming: prompt_chars=2107 sha256=af650654280ccb0d...
+  primed in 253.6s wall -- prompt_tokens=414 completion_tokens=12 ttft=186.38s disk_nrec_verified=425
+
+--pilot: one COLD trial, one RESUME trial (schedule/stats/ABBA not exercised)
+  [  cold] ttft=352.17s load=4.28s prompt_tokens=414 completion_tokens=12 proof={'slot': 0, 'prefix': 0, 'prompt_tokens': 414, 'prefill': 414} matches_expectation=True wall=449.1s
+  [resume] ttft=96.42s load=5.77s prompt_tokens=414 completion_tokens=12 proof={'slot': 0, 'prefix': 414, 'prompt_tokens': 414, 'prefill': 0} matches_expectation=True wall=242.2s
+
+pilot results written to <repo>/c/bench-m5max/ili-kv-resume-abba/results/pilot.json

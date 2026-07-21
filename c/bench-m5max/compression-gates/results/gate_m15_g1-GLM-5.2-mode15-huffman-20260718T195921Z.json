@@ -1,0 +1,107 @@
+{
+  "gate": "gate_m15_g1",
+  "timestamp_utc": "2026-07-18T19:55:49Z",
+  "indir": "<HOME>/models/GLM-5.2-int4-with-int8-mtp",
+  "outdir": "<HOME>/models/GLM-5.2-mode15-huffman",
+  "limit_shards": 3,
+  "bit_exactness": {
+    "status": "PASS",
+    "shards_checked": [
+      "out-00000.safetensors",
+      "out-00001.safetensors",
+      "out-00002.safetensors"
+    ],
+    "per_shard": [
+      {
+        "shard": "out-00000.safetensors",
+        "n_tensors_checked": 60,
+        "n_rows_checked": 204800,
+        "n_blocks_checked": 800,
+        "raw_bytes": 377487360,
+        "encoded_bytes": 284039107,
+        "ratio": 0.7524466700024075,
+        "n_failures": 0
+      },
+      {
+        "shard": "out-00001.safetensors",
+        "n_tensors_checked": 426,
+        "n_rows_checked": 1454080,
+        "n_blocks_checked": 5680,
+        "raw_bytes": 2680160256,
+        "encoded_bytes": 2016772605,
+        "ratio": 0.7524820952348306,
+        "n_failures": 0
+      },
+      {
+        "shard": "out-00002.safetensors",
+        "n_tensors_checked": 409,
+        "n_rows_checked": 1398784,
+        "n_blocks_checked": 5464,
+        "raw_bytes": 2573205504,
+        "encoded_bytes": 1936953474,
+        "ratio": 0.7527395192451757,
+        "n_failures": 0
+      }
+    ],
+    "n_tensors_checked": 895,
+    "n_rows_checked": 3057664,
+    "n_blocks_checked": 11944,
+    "raw_bytes": 5630853120,
+    "encoded_bytes": 4237765186,
+    "ratio": 0.7525973588172727,
+    "failures": [],
+    "n_failures": 0
+  },
+  "corruption_truncation": {
+    "status": "PASS",
+    "tests": {
+      "flip_payload_byte": {
+        "pass": true,
+        "detail": "whole-tensor CRC32 caught it: whole-tensor CRC32 mismatch: got 0xc11a3159, stored 0xec18ded4"
+      },
+      "flip_row_offsets_byte": {
+        "pass": true,
+        "detail": "caught: Mode15ChecksumError: whole-tensor CRC32 mismatch: got 0x3bb928bc, stored 0xec18ded4"
+      },
+      "truncation_fails_closed": {
+        "pass": true,
+        "detail": [
+          {
+            "cut_at": 0,
+            "caught": true,
+            "detail": "truncated: blob is 0 bytes, need >= 24 for the header"
+          },
+          {
+            "cut_at": 1,
+            "caught": true,
+            "detail": "truncated: blob is 1 bytes, need >= 24 for the header"
+          },
+          {
+            "cut_at": 24,
+            "caught": true,
+            "detail": "truncated: missing lengths table"
+          },
+          {
+            "cut_at": 194100,
+            "caught": true,
+            "detail": "length mismatch: blob is 194100 bytes, expected exactly 388201 (truncated if shorter, trailing garbage if longer) -- fail-closed on ANY deviation, not just short reads"
+          },
+          {
+            "cut_at": 388200,
+            "caught": true,
+            "detail": "length mismatch: blob is 388200 bytes, expected exactly 388201 (truncated if shorter, trailing garbage if longer) -- fail-closed on ANY deviation, not just short reads"
+          }
+        ]
+      },
+      "block_checksum_localizes_corruption": {
+        "pass": true,
+        "detail": "corrupted block 1, flagged [1]"
+      },
+      "bad_magic_rejected": {
+        "pass": true,
+        "detail": "bad magic b'\\xb2H01', expected b'MH01'"
+      }
+    }
+  },
+  "overall": "PASS"
+}

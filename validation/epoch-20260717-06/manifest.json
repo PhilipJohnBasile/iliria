@@ -1,0 +1,12 @@
+{
+ "epoch_id": "epoch-20260717-06 (compression-baseline)",
+ "created_utc": "2026-07-18T00:45:48Z",
+ "source_commit": "a7d952b1a70911dbe4c9a5f7adbf475ce77ec838",
+ "suite": "green idle (this source; prior red classified as concurrent-load artifacts)",
+ "engine": {
+  "glm_sha256": "61fb5baf3e2f32d66eaef96c2488545c34b8cf79ed053e2a4aeb923eb01fd337",
+  "build": "make clean glm METAL=1"
+ },
+ "instrumentation": "a2 timestamps + logit-dump present but env-gated OFF by default; argmax-hash parity receipt 1b4e675e vs epoch-05",
+ "purpose": "baseline for compression campaign gate 5 (c0cfc63); never labeled epoch-05"
+}

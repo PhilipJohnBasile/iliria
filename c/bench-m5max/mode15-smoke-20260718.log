@@ -1,0 +1,22 @@
+[encode_mode15] 164 shards, conservative remaining-to-write estimate 383.9 GB (assumes no savings), free 546.2 GB
+[encode_mode15 1/164] out-00000.safetensors: 60 expert tensors encoded (ratio 0.7524), 2.58 GB, 36.3s
+[encode_mode15 2/164] out-00001.safetensors: 426 expert tensors encoded (ratio 0.7525), 2.02 GB, 253.3s
+[encode_mode15 3/164] out-00002.safetensors: 409 expert tensors encoded (ratio 0.7527), 2.05 GB, 266.3s
+[encode_mode15] --limit 3 reached (rerun to resume)
+[encode_mode15] 3/164 shards recorded done; aggregate expert-tensor ratio so far: 0.7526 (5.63 GB -> 4.24 GB); 555.9s this invocation
+[encode_mode15] INTERRUPTED/PARTIAL at 3/164 shards (rerun to resume)
+
+=== G1 gate run ===
+[gate_m15_g1] out-00000.safetensors: 60 tensors, 204800 rows, 800 blocks checked bit-exact vs source, ratio=0.7524, failures=0
+[gate_m15_g1] out-00001.safetensors: 426 tensors, 1454080 rows, 5680 blocks checked bit-exact vs source, ratio=0.7525, failures=0
+[gate_m15_g1] out-00002.safetensors: 409 tensors, 1398784 rows, 5464 blocks checked bit-exact vs source, ratio=0.7527, failures=0
+[gate_m15_g1] bit-exactness: 895 tensors / 3057664 rows / 11944 blocks across 3 shard(s) -> PASS (ratio 0.7526)
+[gate_m15_g1] corruption/truncation battery: PASS
+    flip_payload_byte: PASS
+    flip_row_offsets_byte: PASS
+    truncation_fails_closed: PASS
+    block_checksum_localizes_corruption: PASS
+    bad_magic_rejected: PASS
+
+[gate_m15_g1] report written -> <repo>/c/bench-m5max/compression-gates/results/gate_m15_g1-GLM-5.2-mode15-huffman-20260718T195921Z.json
+GATE G1: PASS

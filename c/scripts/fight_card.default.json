@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "description": "Saturday FIGHT card: the combination sweep + ablation runner that decides shipped defaults. STACK = every currently-surviving (not dead, not not_built) env lever from docs/performance-theory.json, run together, tested against today's shipped baseline. ABLATIONS are computed by fight_card.sh, NOT hand-listed here (stack minus exactly one lever, mechanically derived from `stack.levers` -- this is deliberate: a hand-maintained ablation list can drift out of sync with the stack's own lever list, which is exactly the fork-and-drift failure mode this harness exists to avoid). REVIVAL rows are graveyard candidates that only run when their documented trigger fires; both are currently unmet, so a default run SKIPS both and records why.",
+  "note_on_illustrative_lever_names": "An earlier verbal brief for this card named ILI_FUSED_GATEUP / ILI_GPU_REDUCE / ILI_METAL_REGION_HANDLES as example STACK members. Verified against c/glm.c, c/backend_metal.mm, c/backend_metal.h, c/compat.h (grep for ili_env(...)/getenv(...) call sites): none of the three exist as implemented env vars today. The closest match, a1-fused-eight-expert-layer-kernel (fused gate/up/SiLU/down MoE kernel), is status pending/pending/not_built in docs/performance-theory.json -- i.e. not yet built, so no flag exists to test. This card's STACK instead uses the three real, currently-implemented, currently-surviving levers (ILI_METAL_PREFILL, ILI_METAL4_MOE, ILI_METAL_PERSISTENT_STATE) plus container path selection. When a1 (or any other not_built lever) actually ships a flag, add it to `levers` and `stack.levers` here.",
+  "containers": {
+    "int4_reference": {
+      "path": "/path/to/GLM-5.2-int4-with-int8-mtp",
+      "note": "Today's shipped reference container. Used by every row below. Edit this path (or point ILI_FIGHT_CARD at your own card JSON) to your own model directory."
+    },
+    "mixed_int4_int2": {
+      "path": "/path/to/GLM-5.2-iliria-mixed-280",
+      "note": "tiered-int4-int2-mixed-precision-container (docs/performance-theory.json) is pending/pending/not_built as of this card's writing: its own 3 gates (MC parity vs int4, long-generation collapse test, +5% frozen-state paired A/B; see c/scripts/run_container_gates.sh) have not yet all passed. Not selected by default_container or any row below. Flip `default_container` (or a row's own `container` override) to this once those gates clear."
+    }
+  },
+  "default_container": "int4_reference",
+  "matrix": {
+    "passes": 3,
+    "ngen": 112,
+    "cache_states": ["warm", "cold"],
+    "hotset_profile": "coding"
+  },
+  "quiesce_granularity": "per_cell",
+  "fixed_env": {
+    "TEMP": "0",
+    "SEED": "1",
+    "ILI_PILOT_METRICS": "1",
+    "ILI_IGNORE_PROFILE": "1",
+    "ILI_RAM_GB": "114",
+    "ILI_WIRED_MB": "122000",
+    "ILI_PIPE": "1",
+    "ILI_IO_THREADS": "8",
+    "ILI_OMP_THREADS": "6",
+    "ILI_KMP_BLOCKTIME": "200",
+    "ILI_MMAP": "0",
+    "ILI_DIRECT": "1",
+    "ILI_REPIN": "0",
+    "ILI_AUTOPIN": "1",
+    "ILI_CPU_GROUPED_MOE": "1",
+    "ILI_CPU_MOE_MISSES": "0",
+    "ILI_DRAFT": "0",
+    "ILI_PILOT": "0",
+    "ILI_PILOT_REAL": "0",
+    "ILI_PILOT_K": "6",
+    "ILI_DSA": "0"
+  },
+  "levers_field_note": "Three values per lever, deliberately distinct: shipped_default_value is what today's real launcher default resolves to (the BASELINE row uses this -- 'what a user gets today'); off_value is the value meaning 'this lever is not contributing to the stack' (every ABLATION row forces exactly one lever to this value, leaving the rest at candidate_value -- 'stack minus one lever'); candidate_value is the on/enabled value the STACK uses. For ILI_METAL4_MOE and ILI_METAL_PERSISTENT_STATE, shipped_default_value == off_value (both opt-in, off today) so the distinction is moot. It is NOT moot for ILI_METAL_PREFILL, which is already shipped default_on: its shipped_default_value (1) and off_value (0) differ, so baseline and 'ablate this lever' are two genuinely different configurations -- collapsing them into one field was tried first and produced a silent bug (ablate_ILI_METAL_PREFILL resolving byte-identical to stack, caught by the --dry-run proof run), which is why this card uses three explicit fields instead of two.",
+  "levers": {
+    "ILI_METAL_PREFILL": {
+      "shipped_default_value": "1",
+      "off_value": "0",
+      "candidate_value": "1",
+      "requires_lab_build": false,
+      "status_ref": "metal-prefill-attention-kernel-gate-2",
+      "note": "Already shipped default_on (run-m5max-fast.sh/run-m5max-serve.sh both resolve ILI_METAL_PREFILL:-1). Carried in the STACK at its shipped value (1) so the ablation row (forcing it to off_value=0, i.e. the CPU attention path) shows whether it still earns its keep alongside the newer METAL4/persistent-state levers, not to re-litigate its own already-settled promotion. Kernel-family-rounding note: forcing this to 0 changes CPU-vs-Metal attention arithmetic and MAY fork the output hash vs the stack row -- expected and recorded, not a failure (README.md 'kernel-family rounding can flip greedy tokens'; user ruling 2026-07-14)."
+    },
+    "ILI_METAL4_MOE": {
+      "shipped_default_value": "0",
+      "off_value": "0",
+      "candidate_value": "1",
+      "requires_lab_build": true,
+      "status_ref": "metal4-moe-submission",
+      "note": "confirmed/provisional/retained -- 'rides in the stack' per its own docs/performance-theory.json notes (median +2.05% alone, below the individual +5% bar, kept under the stack-level promote-bar rule). Requires the METAL4=1 lab build (build-m5max-lab.sh + tools/patch_m5max_metal4.py) -- plain `make mac-fast` does not compile this path."
+    },
+    "ILI_METAL_PERSISTENT_STATE": {
+      "shipped_default_value": "0",
+      "off_value": "0",
+      "candidate_value": "1",
+      "requires_lab_build": true,
+      "status_ref": "persistent-metal-state",
+      "note": "confirmed(infra)/null/retained -- 0.00%/-0.67%/0.00% paired, kept as lifecycle-safe infrastructure the stack rides on. Requires the same METAL4=1 lab build (patch order: metal4 patched before persistent-state)."
+    }
+  },
+  "stack": {
+    "levers": ["ILI_METAL_PREFILL", "ILI_METAL4_MOE", "ILI_METAL_PERSISTENT_STATE"],
+    "container": "int4_reference"
+  },
+  "excluded_from_stack": [
+    {
+      "lever": "ILI_DSA",
+      "status_ref": "dsa-sparse-indexer",
+      "reason": "opt_in but performance falsified-as-combined-default: confirmed -10% decode cost below 2048 ctx, wins only at long (~4.5K+) CPU-bound prefill context. This card's frozen-state matrix is short-prompt/decode-regime (NGEN=112, moderate prompts) -- exactly the regime DSA is documented to hurt. Included here only as a record of why it is deliberately NOT a stack member, not an oversight."
+    },
+    {
+      "lever": "ILI_PREFILL_CHUNK (serve-mode chunked prefill)",
+      "status_ref": "chunked-serve-prefill",
+      "reason": "Serve-mode-only (chunks a monolithic multi-K-token prefill to bound peak memory). This card's matrix reuses ab-m5max-k6-matrix.sh's one-shot `run-m5max-fast.sh ... run PROMPT` machinery -- no monolithic long-prefill scenario for this lever to act on -- regime mismatch, not a finding against it."
+    },
+    {
+      "lever": "ILI_TRIM_TOOL_OUTPUT_TOKENS (serve-mode context-diet trimming)",
+      "status_ref": "context-diet-trimming",
+      "reason": "Serve-mode-only (trims a GROWING multi-turn agent history). This card's matrix has no multi-turn history at all (each row is a single one-shot prompt) -- regime mismatch, not a finding against it."
+    },
+    {
+      "lever": "n/a (closed-form provisioning guidance, not a runtime flag)",
+      "status_ref": "kv-slot-allocation-economics",
+      "reason": "Serve-mode KV-slot count/RAM guidance, not something a one-shot run-m5max-fast.sh matrix exercises at all -- regime mismatch, not a finding against it."
+    }
+  ],
+  "revival": [
+    {
+      "name": "revival_mtp_draft1",
+      "display_name": "MTP DRAFT=1 (graveyard revival)",
+      "status_ref": "mtp-speculative-decoding",
+      "add_env": {"ILI_DRAFT": "1"},
+      "trigger": {
+        "kind": "measured_metric",
+        "metric": "miss_bytes_per_token_gb",
+        "comparator": "lt",
+        "threshold": 1.5,
+        "measured_value": null,
+        "description": "Revive only once measured disk miss bytes per emitted token drop below 1.5 GB. Currently measured figures are well above this (the offline math-verdict record: ~4.2 GB/token at k=8, ~2.75-4.2 GB/token across the Ke sweep; the sketch-draft feasibility analysis: ~3.6 GB/token flat in K for the related sketch-draft design) -- MTP's own K-token verification cost is what a lower miss-bytes/token figure would finally amortize against (falls with cache hit-rate gains and/or the mixed-precision container's smaller expert bytes). Supply the latest measured value with `fight_card.sh --set-measurement miss_bytes_per_token_gb=<value>`; fail-closed by design -- without an explicit measured value on record this row is SKIPPED, never silently assumed met."
+      }
+    },
+    {
+      "name": "revival_pilot_k6",
+      "display_name": "PILOT K6 (graveyard revival)",
+      "status_ref": "pilot-k6-router-lookahead-prefetch",
+      "add_env": {"ILI_PILOT": "1", "ILI_PILOT_REAL": "1", "ILI_PILOT_K": "6"},
+      "trigger": {
+        "kind": "performance_theory_status",
+        "watch_ids": ["a3-dsa-metal-decode-extension", "dsa-metal-kernel-design-study", "tiered-int4-int2-mixed-precision-container"],
+        "requires_shipping_in": ["enabled", "default_on", "opt_in", "retained"],
+        "any_or_all": "any",
+        "description": "PILOT K6's own REGIME CAUTION (docs/performance-theory.json) requires a DECODE-regime change, not a prefill-regime one: 'DSA-aware decode ..., mixed precision, or a materially different cache residency'. Mapped here to two of those three (a3-dsa-metal-decode-extension for DSA-aware decode; tiered-int4-int2-mixed-precision-container for mixed precision) plus dsa-metal-kernel-design-study (the design study gating both). 'a materially different cache residency' has no single tracked id yet -- if one ships under a new id, add it to watch_ids. Checked automatically against docs/performance-theory.json's shipping.code for each watched id at fight_card.sh run time; ANY watched id moving out of {pending, not_built} satisfies the trigger. All three are pending/not_built as of this card's writing, so this row is SKIPPED by default."
+      }
+    }
+  ]
+}

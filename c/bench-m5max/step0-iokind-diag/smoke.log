@@ -1,0 +1,54 @@
+start: 2026-07-20T18:21:40-0400
+[DSA] indexer active: top-2048 sparse attention beyond 2048 context tokens
+[MTP] absent (draft=0)
+[USAGE] expert history: 15028800 selections (<HOME>/models/GLM-5.2-int4-with-int8-mtp/.fa_usage)
+[RAM_GB=40.0] cap raised 8->16: budget allows it (projected peak 39.2 GB; set CAP_RAISE=0 to disable)
+[stop] 3 stop tokens: 154820 154827 154829
+== GLM C engine (glm_moe_dsa), cache=8 experts/layer | experts@8-bit dense@8-bit | idot: neon ==
+EFFECTIVE-FLAGS: METAL requested=unset effective=0
+EFFECTIVE-FLAGS: METAL_PREFILL requested=unset effective=0
+EFFECTIVE-FLAGS: DSA requested=unset effective=1
+EFFECTIVE-FLAGS: IO_DELAY_US requested=unset effective=0
+EFFECTIVE-FLAGS: IO_DELAY_DECODE_US requested=unset effective=0
+EFFECTIVE-FLAGS: PREFILL_DELAY_US effective=0
+EFFECTIVE-FLAGS: DECODE_DELAY_US effective=0
+EFFECTIVE-FLAGS: PIPE requested=unset effective=0
+loaded in 1.35s | resident dense: 9835.13 MB | layers=78 experts=256 | MTP absent (draft=0)
+prompt: 13 tokens | generating up to 8 (EOS stop=154820) | n-gram draft=0
+[gMASK]<sop><|user|>What is 2+2?<|assistant|><think></think>[prefill] layer 1/78 · 13 token
+[prefill] layer 5/78 · 13 token
+[prefill] layer 9/78 · 13 token
+[prefill] layer 13/78 · 13 token
+[prefill] layer 17/78 · 13 token
+[prefill] layer 21/78 · 13 token
+[prefill] layer 25/78 · 13 token
+[prefill] layer 29/78 · 13 token
+[prefill] layer 33/78 · 13 token
+[prefill] layer 37/78 · 13 token
+[prefill] layer 41/78 · 13 token
+[prefill] layer 45/78 · 13 token
+[prefill] layer 49/78 · 13 token
+[prefill] layer 53/78 · 13 token
+[prefill] layer 57/78 · 13 token
+[prefill] layer 61/78 · 13 token
+[prefill] layer 65/78 · 13 token
+[prefill] layer 69/78 · 13 token
+[prefill] layer 73/78 · 13 token
+[prefill] layer 77/78 · 13 token
+[prefill] layer 78/78 · 13 token
+2 + 2 = 4.
+---
+8 tokens in 26.06s (0.31 tok/s) | expert hit rate 21.9% | RSS 31.05 GB
+experts loaded/token: 1500.0 (per-layer 20.00 across 75; baseline topk=8) | TOPK=0 TOPP=0.00
+speculation: 1.14 tokens/forward (7 forwards per 8 tokens) | MTP acceptance 0% (0/0)
+output token hash: 13a7389675863d07
+PROFILE: expert-disk 9.592s | expert-matmul 11.700s | attention 2.924s (including kvb 0.073s) | lm_head 0.014s | other 1.832s
+STALL-EXPOSED: 9.592s (consumer-blocked critical-path only, excludes overlapped service) | pipe-waits 0 blocked 0 (occupancy 0.0%)
+STALL-EXPOSED/TOKEN: 1198.9563 ms/token (n=8 decode tokens)
+IO-BYTES: requested 122401087488 | read 122401087488 | reads attempted 6471 completed 6471 | hits 1817 misses 6471 (21.9% hit)
+IO-BYTES/TOKEN: requested 15300135936.0 B/token | read 15300135936.0 B/token
+IO-LATENCY: read-completion p50 11.9400ms p95 28.5900ms p99 37.9030ms (n=6471 samples)
+[IOKIND] weight: n=6555 bytes=122136035328 lat_sum_s=67.333256 | scale: n=19413 bytes=265052160 lat_sum_s=21.959842
+WALL-SUM: compute 14.638s + exposed-stall 9.592s + other 1.832s = wall 26.061s | residual(other) 7.0% of wall (async service/read-latency/disk-activity above are OVERLAPPING telemetry, never included in this sum)
+rc=0
+end: 2026-07-20T18:22:08-0400
