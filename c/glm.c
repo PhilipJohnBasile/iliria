@@ -2070,6 +2070,41 @@ static void qt_matvec_rows(const QT *t, int r0, int n, const float *x, float *y)
         y[j]=(float)a;
     }
 }
+/* Row-slice view of a quantized tensor: output rows [r0, r0+n) of `t`, same input dim.
+ * Sound because every QT format is row-major with a per-row scale (see qt_matvec_rows):
+ * fmt0 qf+row*I, fmt1 q8+row*I, fmt2 q4+row*((I+1)/2), fmt3 q4+row*((I+3)/4), scale s[row].
+ * Device paths are disabled on the view: its weight pointer is a mid-buffer offset that was
+ * never registered with the Metal/CUDA backends, so the view must stay on the CPU kernels. */
+static void qt_row_view(QT *v, const QT *t, int r0, int n){
+    *v = *t;
+    v->O = n;
+    if(t->fmt==0)      v->qf = t->qf + (int64_t)r0*t->I;
+    else if(t->fmt==1) v->q8 = t->q8 + (int64_t)r0*t->I;
+    else if(t->fmt==2) v->q4 = t->q4 + (int64_t)r0*((int64_t)(t->I+1)/2);
+    else               v->q4 = t->q4 + (int64_t)r0*((int64_t)(t->I+3)/4);
+    if(t->s) v->s = t->s + r0;
+#ifdef ILI_CUDA
+    v->cuda_eligible = 0;
+#endif
+}
+
+/* ILI_ATTN_HEAD_TILE=1 reconstructs k/v ONE HEAD AT A TIME in the S>4 prefill attention
+ * instead of materializing all heads at once. The transient drops from
+ * Tk*n_heads*(qk_nope+v_head) to Tk*(qk_nope+v_head) floats -- 64x at GLM-5.2 dims, i.e.
+ * ~3.4 GB -> ~53 MB at 30K context -- which is the O(context) prefill peak that
+ * ILI_PREFILL_CHUNK does NOT bound (see the kvb_all note in attention()).
+ *
+ * Arithmetic is unchanged: each (s,h) computes the same scores over the same t in the same
+ * order, softmaxes the same vector, and accumulates in the same order, so results are
+ * bit-identical -- this is a memory layout change, not a flash-attention-style rewrite.
+ * The cost is that the per-head reconstruction runs on the CPU kernels (a row-sliced view
+ * cannot use the registered-pointer Metal GEMM) and parallelism comes from S alone rather
+ * than S*H, so it trades prefill speed for headroom. OPT-IN, default off.
+ *
+ * ILI_ATTN_HEAD_TILE_VERIFY=1 additionally computes the original path and reports the max
+ * absolute divergence, so equivalence can be confirmed on real weights before trusting it. */
+static int g_attn_head_tile=-1, g_attn_head_tile_verify=-1;
+
 static int g_absorb=-1;   /* ABSORB: -1 auto (decode S<=4), 0 mai, 1 sempre (test) */
 static int g_dsa_force=0; /* DSA_FORCE=1: selezione sempre attiva (test: top-min(k,T)=denso) */
 /* Extracted for direct unit-testability (c/tests/test_dsa_gate_regression.c, via the same
@@ -2309,37 +2344,96 @@ static void attention(Model *m, Layer *l, int layer, float *x, int S, int pos_ba
      * via ctx_clamp_for_ram() (ILI_CTX_FORCE=1 overrides). */
     double tk0=now_s();
     int stL=m->kv_start[layer];
-    float *kvb_all=falloc((int64_t)Tk*kvb_dim);
-    matmul_qt(kvb_all+(int64_t)stL*kvb_dim, m->Lc[layer]+(int64_t)stL*c->kv_lora, &l->kv_b, Tk-stL);
-    m->t_kvb += now_s()-tk0;
+    if(g_attn_head_tile<0){
+        const char *e=ili_env("ATTN_HEAD_TILE");        g_attn_head_tile        = e?atoi(e):0;
+        const char *v=ili_env("ATTN_HEAD_TILE_VERIFY"); g_attn_head_tile_verify = v?atoi(v):0;
+    }
+    int hd = c->qk_nope + vh;                 /* one head's reconstructed k/v width */
+    int use_tile = g_attn_head_tile || g_attn_head_tile_verify;
+    float *kvb_all=NULL, *ctx_ref=NULL;
     /* 3) attenzione causale: score = q_pass·k_nope + q_rot·k_rot */
     int64_t sc_cap=Tk-stL;
     float *sc_all=falloc((int64_t)omp_get_max_threads()*sc_cap);
-    #pragma omp parallel for collapse(2) schedule(static)
-    for(int s=0;s<S;s++) for(int h=0;h<H;h++){
-        int pos=pos_base+s;
-        const float *qp=Q+(int64_t)s*H*qh+(int64_t)h*qh;          /* [qk_nope | qk_rope] */
-        const float *qr=qp+c->qk_nope;
-        float *sc=sc_all+(int64_t)omp_get_thread_num()*sc_cap;
-        int st0=m->kv_start[layer];
-        int ns = (dnsel && dnsel[s]>0) ? dnsel[s] : 0;        /* DSA: lista top-k o range pieno */
-        const int *tlist = ns ? dsel+(int64_t)s*dtopk : NULL;
-        int nt = ns ? ns : pos+1-st0;
-        for(int jj=0;jj<nt;jj++){ int t = tlist ? tlist[jj] : st0+jj;
-            const float *kn=kvb_all+(int64_t)t*kvb_dim+(int64_t)h*(c->qk_nope+vh);
-            const float *kr=m->Rc[layer]+(int64_t)t*c->qk_rope;
-            float a=0; for(int d=0;d<c->qk_nope;d++) a+=qp[d]*kn[d];
-            for(int d=0;d<c->qk_rope;d++) a+=qr[d]*kr[d];
-            sc[jj]=a*c->attn_scale;
+
+    if(use_tile){
+        /* Head-tiled reconstruction: Tk*hd floats instead of Tk*H*hd (see g_attn_head_tile).
+         * Each (s,h) still scores the same t in the same order and accumulates in the same
+         * order as below, so this is bit-identical -- only the buffer's shape changes. */
+        float *kvb_h=falloc((int64_t)Tk*hd);
+        for(int h=0;h<H;h++){
+            QT hv; qt_row_view(&hv,&l->kv_b,(int64_t)h*hd,hd);
+            double th0=now_s();
+            matmul_qt(kvb_h+(int64_t)stL*hd, m->Lc[layer]+(int64_t)stL*c->kv_lora, &hv, Tk-stL);
+            m->t_kvb += now_s()-th0;
+            #pragma omp parallel for schedule(static)
+            for(int s=0;s<S;s++){
+                int pos=pos_base+s;
+                const float *qp=Q+(int64_t)s*H*qh+(int64_t)h*qh;
+                const float *qr=qp+c->qk_nope;
+                float *sc=sc_all+(int64_t)omp_get_thread_num()*sc_cap;
+                int st0=stL;
+                int ns = (dnsel && dnsel[s]>0) ? dnsel[s] : 0;
+                const int *tlist = ns ? dsel+(int64_t)s*dtopk : NULL;
+                int nt = ns ? ns : pos+1-st0;
+                for(int jj=0;jj<nt;jj++){ int t = tlist ? tlist[jj] : st0+jj;
+                    const float *kn=kvb_h+(int64_t)t*hd;
+                    const float *kr=m->Rc[layer]+(int64_t)t*c->qk_rope;
+                    float a=0; for(int d=0;d<c->qk_nope;d++) a+=qp[d]*kn[d];
+                    for(int d=0;d<c->qk_rope;d++) a+=qr[d]*kr[d];
+                    sc[jj]=a*c->attn_scale;
+                }
+                softmax(sc,nt);
+                float *cx=ctx+((int64_t)s*H+h)*vh; for(int d=0;d<vh;d++) cx[d]=0;
+                for(int jj=0;jj<nt;jj++){ int t = tlist ? tlist[jj] : st0+jj;
+                    const float *vv=kvb_h+(int64_t)t*hd+c->qk_nope;
+                    float a=sc[jj]; for(int d=0;d<vh;d++) cx[d]+=a*vv[d]; }
+            }
         }
-        softmax(sc,nt);
-        float *cx=ctx+((int64_t)s*H+h)*vh; for(int d=0;d<vh;d++) cx[d]=0;
-        for(int jj=0;jj<nt;jj++){ int t = tlist ? tlist[jj] : st0+jj;
-            const float *vv=kvb_all+(int64_t)t*kvb_dim+(int64_t)h*(c->qk_nope+vh)+c->qk_nope;
-            float a=sc[jj]; for(int d=0;d<vh;d++) cx[d]+=a*vv[d]; }
+        free(kvb_h);
+    }
+
+    if(!g_attn_head_tile || g_attn_head_tile_verify){
+        /* Original all-heads path. Under VERIFY it writes a reference copy instead of ctx,
+         * so the two can be compared on real weights. */
+        float *dst = (use_tile && g_attn_head_tile_verify)
+                   ? (ctx_ref=falloc((int64_t)S*H*vh)) : ctx;
+        kvb_all=falloc((int64_t)Tk*kvb_dim);
+        matmul_qt(kvb_all+(int64_t)stL*kvb_dim, m->Lc[layer]+(int64_t)stL*c->kv_lora, &l->kv_b, Tk-stL);
+        m->t_kvb += now_s()-tk0;
+        #pragma omp parallel for collapse(2) schedule(static)
+        for(int s=0;s<S;s++) for(int h=0;h<H;h++){
+            int pos=pos_base+s;
+            const float *qp=Q+(int64_t)s*H*qh+(int64_t)h*qh;      /* [qk_nope | qk_rope] */
+            const float *qr=qp+c->qk_nope;
+            float *sc=sc_all+(int64_t)omp_get_thread_num()*sc_cap;
+            int st0=m->kv_start[layer];
+            int ns = (dnsel && dnsel[s]>0) ? dnsel[s] : 0;    /* DSA: lista top-k o range pieno */
+            const int *tlist = ns ? dsel+(int64_t)s*dtopk : NULL;
+            int nt = ns ? ns : pos+1-st0;
+            for(int jj=0;jj<nt;jj++){ int t = tlist ? tlist[jj] : st0+jj;
+                const float *kn=kvb_all+(int64_t)t*kvb_dim+(int64_t)h*(c->qk_nope+vh);
+                const float *kr=m->Rc[layer]+(int64_t)t*c->qk_rope;
+                float a=0; for(int d=0;d<c->qk_nope;d++) a+=qp[d]*kn[d];
+                for(int d=0;d<c->qk_rope;d++) a+=qr[d]*kr[d];
+                sc[jj]=a*c->attn_scale;
+            }
+            softmax(sc,nt);
+            float *cx=dst+((int64_t)s*H+h)*vh; for(int d=0;d<vh;d++) cx[d]=0;
+            for(int jj=0;jj<nt;jj++){ int t = tlist ? tlist[jj] : st0+jj;
+                const float *vv=kvb_all+(int64_t)t*kvb_dim+(int64_t)h*(c->qk_nope+vh)+c->qk_nope;
+                float a=sc[jj]; for(int d=0;d<vh;d++) cx[d]+=a*vv[d]; }
+        }
+    }
+
+    if(g_attn_head_tile_verify && ctx_ref){
+        double mx=0; int64_t n=(int64_t)S*H*vh;
+        for(int64_t i=0;i<n;i++){ double d=fabs((double)ctx[i]-(double)ctx_ref[i]); if(d>mx) mx=d; }
+        fprintf(stderr,"[ATTN_HEAD_TILE] layer %d S=%d Tk=%d max|tiled-reference| = %.3g%s\n",
+                layer, S, Tk, mx, mx==0.0 ? " (bit-identical)" : "");
+        free(ctx_ref);
     }
     matmul_qt(out, ctx, &l->o, S);
-    free(ctx); free(Q); free(QR); free(comp); free(kvb_all); free(sc_all);
+    free(ctx); free(Q); free(QR); free(comp); if(kvb_all) free(kvb_all); free(sc_all);
     m->t_attn += now_s()-ta0;
 }
 
