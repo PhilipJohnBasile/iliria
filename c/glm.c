@@ -865,10 +865,15 @@ static void load_cfg(Cfg *c, const char *snap){
     CKR("num_experts_per_tok",c->topk,1,64)      CKR("moe_intermediate_size",c->moe_inter,1,1<<20)
     CKR("intermediate_size",c->dense_inter,1,1<<24) CKR("first_k_dense_replace",c->first_dense,0,c->n_layers)
     CKR("q_lora_rank",c->q_lora,0,1<<20)         CKR("kv_lora_rank",c->kv_lora,1,1<<20)
-    CKR("qk_nope_head_dim",c->qk_nope,1,1<<16)   CKR("qk_rope_head_dim",c->qk_rope,1,1<<16)
+    /* qk_rope <= 256: rope_interleave() copies qk_rope floats into a fixed `float in[256]`
+     * stack buffer on EVERY forward; index_n_heads <= 64: the DSA indexer writes index_nh
+     * scores into a fixed `float w32[64]` stack buffer (attention()). This choke point must
+     * guarantee every fixed-size stack array downstream, or a valid-but-larger config
+     * smashes the stack instead of failing loudly here (2026-07-21 bug pass). */
+    CKR("qk_nope_head_dim",c->qk_nope,1,1<<16)   CKR("qk_rope_head_dim",c->qk_rope,1,256)
     CKR("v_head_dim",c->v_head,1,1<<16)          CKR("n_shared_experts",c->n_shared,0,64)
     CKR("vocab_size",c->vocab,1,1<<24)           CKR("index_topk",c->index_topk,0,1<<20)
-    CKR("index_n_heads",c->index_nh,0,1024)      CKR("index_head_dim",c->index_hd,0,1<<16)
+    CKR("index_n_heads",c->index_nh,0,64)        CKR("index_head_dim",c->index_hd,0,1<<16)
     #undef CKR
     free(ar);
 }
@@ -1954,7 +1959,20 @@ static void pipe_init(Model *m){
     g_pp.m=m; g_pp.nw=g_pipe_nw; if(g_pp.nw>16) g_pp.nw=16; if(g_pp.nw<1) g_pp.nw=1;
     atomic_store(&g_pp.cur,0); atomic_store(&g_pp.njobs,0);
     pthread_mutex_init(&g_pp.mx,NULL); pthread_cond_init(&g_pp.cv,NULL);
-    for(int i=0;i<g_pp.nw;i++) pthread_create(&g_pp.th[i],NULL,pipe_worker,NULL);
+    /* pthread_create CAN fail (EAGAIN under thread/rlimit pressure). If NO worker starts,
+     * a later pipe_dispatch would enqueue jobs nobody ever runs and pipe_wait() would spin
+     * on ready[q] forever -- a silent mid-token hang. Count live workers; with zero, clear
+     * g_pipe so the caller takes the synchronous blocking-load path (2026-07-21 bug pass). */
+    int live=0;
+    for(int i=0;i<g_pp.nw;i++) if(pthread_create(&g_pp.th[live],NULL,pipe_worker,NULL)==0) live++;
+    if(live<1){
+        fprintf(stderr,"[PIPE] no I/O worker thread could be started; PIPE disabled, "
+                       "falling back to synchronous expert loads\n");
+        g_pipe=0; return;                        /* started stays 0 */
+    }
+    if(live<g_pp.nw)
+        fprintf(stderr,"[PIPE] only %d/%d I/O worker threads started\n",live,g_pp.nw);
+    g_pp.nw=live;
     g_pp.started=1;
 }
 /* enqueue `njobs` loads (slots ws[0..njobs)); returns immediately, workers run ahead.
@@ -2083,7 +2101,15 @@ static void attention(Model *m, Layer *l, int layer, float *x, int S, int pos_ba
     if(g_metal_enabled && S<=4 && (g_absorb==1||(g_absorb<0&&S<=4)) && m->kv_start[layer]==0
        && D==6144 && H==64 && c->q_lora==2048 && c->kv_lora==512 && c->qk_nope==192
        && c->qk_rope==64 && vh==256 && l->kv_b.fmt==2){
-        int sel_active = m->has_dsa && layer<c->n_layers && c->idx_type[layer] && (pos_base+S) > c->index_topk;
+        /* Gate on the SAME condition as the S>4 prefill path (dsa_gate_blocks_metal_prefill):
+         * once (pos_base+S) > index_topk, DSA selection restricts attention on EVERY layer --
+         * SHARED indexer layers (idx_type==0) reuse the last FULL layer's top-k list in the
+         * CPU path (see the dsel/dnsel reuse in the CPU code below). The previous gate also
+         * tested c->idx_type[layer], which let SHARED layers keep taking this GPU kernel
+         * (plain dense causal attention) past index_topk -- silently diverging from the CPU
+         * reference exactly like the prefill-gate bug that helper's comment documents
+         * (2026-07-21 bug pass). */
+        int sel_active = dsa_gate_blocks_metal_prefill(m->has_dsa,c->n_layers,layer,g_dsa_force,pos_base,S,c->index_topk);
         if(!sel_active){
             if(m->has_dsa && layer<c->n_layers && c->idx_type[layer]){   /* index keys for future selection */
                 for(int s=0;s<S;s++){ int pos=pos_base+s; float *kd=m->Ic[layer]+(int64_t)pos*c->index_hd;
@@ -2275,6 +2301,12 @@ static void attention(Model *m, Layer *l, int layer, float *x, int S, int pos_ba
     }
 #endif
     /* 2) ricostruzione di k_nope+value per TUTTI i token 0..Tk-1 (un solo matmul su kv_b) */
+    /* MEMORY BOUND (2026-07-21 bug pass): this buffer is Tk*n_heads*(qk_nope+v_head)*4
+     * bytes with Tk = the TOTAL context so far -- O(CTX) per chunk per layer, NOT
+     * O(PREFILL_CHUNK) (~112 KB/token at GLM-5.2 dims: 64*448*4). ILI_PREFILL_CHUNK bounds
+     * the x/nrm/tmp/Q/ctx activations but NOT this reconstruction, so raising CTX raises
+     * the transient prefill peak linearly. run_serve clamps CTX against this exact term
+     * via ctx_clamp_for_ram() (ILI_CTX_FORCE=1 overrides). */
     double tk0=now_s();
     int stL=m->kv_start[layer];
     float *kvb_all=falloc((int64_t)Tk*kvb_dim);
@@ -2507,8 +2539,8 @@ static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out){
         if(nmiss){
             int eids[64]; for(int q=0;q<nmiss;q++) eids[q]=uniq[base+missk[q]];
             io_trace_log(layer,eids,nmiss);   /* debug proof-of-single-variable, ILI_IO_TRACE only */
+            if(g_pipe && !g_pp.started) pipe_init(m);   /* may clear g_pipe if no worker could start */
             if(g_pipe){                            /* PIPE: launch loads async, matmul overlaps them */
-                if(!g_pp.started) pipe_init(m);
                 double t0=now_s();
                 pipe_dispatch(m,layer,eids,nmiss);
                 m->t_edisk += now_s()-t0;           /* dispatch only; real reads hide behind matmul */
@@ -2787,7 +2819,12 @@ static void layer_forward(Model *m, Layer *l, int li, float *x, int S, int pos_b
        && D==6144 && c->n_heads==64 && c->q_lora==2048 && c->kv_lora==512
        && c->qk_nope==192 && c->qk_rope==64 && c->v_head==256 && l->kv_b.fmt==2
        && c->n_experts==256 && c->topk==8 && c->n_shared==1 && c->moe_inter==2048){
-        int sel_active = m->has_dsa && c->idx_type[li] && (pos_base+S) > c->index_topk;
+        /* Same gate as attention()'s decode path / dsa_gate_blocks_metal_prefill: past
+         * index_topk, selection restricts SHARED indexer layers too (they reuse the last
+         * FULL layer's top-k list on the CPU path) -- the old `c->idx_type[li]` term let
+         * shared layers keep running this fused GPU layer (dense attention) and silently
+         * diverge from the CPU reference (2026-07-21 bug pass). */
+        int sel_active = dsa_gate_blocks_metal_prefill(m->has_dsa,c->n_layers,li,g_dsa_force,pos_base,S,c->index_topk);
         if(!sel_active){
             static float *linrm,*lnrm,*lsh,*lw; static int *lidx,*lkeff;
             if(!linrm){ linrm=falloc(4*(int64_t)D); lnrm=falloc(4*(int64_t)D); lsh=falloc(4*(int64_t)D);
@@ -3221,13 +3258,14 @@ static void forward_all(Model *m, const int *ids, int S, int *pred){
     for(int s=0;s<S;s++) embed_row(m, ids[s], x+(int64_t)s*D);
     layers_forward(m,x,S,0);
     float *lo=falloc(c->vocab);
+    float *row=falloc(D);   /* heap, not a fixed stack array: hidden may legally exceed 8192 (CKR) */
     for(int s=0;s<S;s++){
-        float row[8192]; rmsnorm(row, x+(int64_t)s*D, m->final_norm, D, c->eps);
+        rmsnorm(row, x+(int64_t)s*D, m->final_norm, D, c->eps);
         matmul_qt(lo, row, &m->lm_head, 1);
         int best=0; float bv=lo[0]; for(int i=1;i<c->vocab;i++) if(lo[i]>bv){bv=lo[i];best=i;}
         pred[s]=best;
     }
-    free(x); free(lo);
+    free(x); free(lo); free(row);
 }
 
 /* log-prob (log-softmax) del token target dato il vettore di logit; *am=1 se e' l'argmax */
@@ -3669,23 +3707,43 @@ static void kv_disk_append(Model *m, const int *hist, int len){
     KVState *k=m->kv;
     if(!g_kvsave || len<=k->disk_nrec) return;
     Cfg *c=&m->c;
+    int ok=1;                                    /* 2026-07-21 bug pass: every write is checked.
+                                                  * The crash-safety design here is "dati prima,
+                                                  * contatore poi" -- but that only holds if a
+                                                  * FAILED data write (disk full: records are
+                                                  * ~180 KB/token) never lets the counter commit.
+                                                  * On any fwrite/fflush failure, leave the OLD
+                                                  * nrec (proven consistent) and warn once. */
     FILE *f=fopen(k->disk_path,"r+b");
     if(!f){ f=fopen(k->disk_path,"wb"); if(!f) return;
-        int32_t h[8]; kv_hdr(m,h,0); fwrite(KV_MAGIC,1,8,f); fwrite(h,4,8,f); }
+        int32_t h[8]; kv_hdr(m,h,0);
+        if(fwrite(KV_MAGIC,1,8,f)!=8 || fwrite(h,4,8,f)!=8) ok=0; }
     int64_t rec = 4 + (int64_t)c->n_layers*(c->kv_lora+c->qk_rope)*4;
     if(m->has_dsa) for(int i=0;i<c->n_layers;i++) if(m->Ic[i]) rec+=(int64_t)c->index_hd*4;
     fseek(f, 8+8*4 + (int64_t)k->disk_nrec*rec, SEEK_SET);
-    for(int p=k->disk_nrec;p<len;p++){
-        int32_t tk=hist[p]; fwrite(&tk,4,1,f);
-        for(int i=0;i<c->n_layers;i++){
-            fwrite(m->Lc[i]+(int64_t)p*c->kv_lora, 4, c->kv_lora, f);
-            fwrite(m->Rc[i]+(int64_t)p*c->qk_rope, 4, c->qk_rope, f);
+    for(int p=k->disk_nrec;p<len && ok;p++){
+        int32_t tk=hist[p]; if(fwrite(&tk,4,1,f)!=1) ok=0;
+        for(int i=0;i<c->n_layers && ok;i++){
+            if(fwrite(m->Lc[i]+(int64_t)p*c->kv_lora, 4, c->kv_lora, f)!=(size_t)c->kv_lora ||
+               fwrite(m->Rc[i]+(int64_t)p*c->qk_rope, 4, c->qk_rope, f)!=(size_t)c->qk_rope) ok=0;
         }
-        if(m->has_dsa) for(int i=0;i<c->n_layers;i++) if(m->Ic[i])
-            fwrite(m->Ic[i]+(int64_t)p*c->index_hd, 4, c->index_hd, f);
+        if(m->has_dsa) for(int i=0;i<c->n_layers && ok;i++) if(m->Ic[i])
+            if(fwrite(m->Ic[i]+(int64_t)p*c->index_hd, 4, c->index_hd, f)!=(size_t)c->index_hd) ok=0;
     }
-    fflush(f);                                   /* dati prima, contatore poi */
-    int32_t nr=len; fseek(f,8+6*4,SEEK_SET); fwrite(&nr,4,1,f); fclose(f);
+    if(fflush(f)!=0) ok=0;                       /* dati prima, contatore poi */
+    if(!ok){
+        fprintf(stderr,"[KV] append to %s FAILED (disk full?): keeping the previous %d-record "
+                       "count; the conversation stays resumable up to there\n",
+                k->disk_path, k->disk_nrec);
+        fclose(f); return;
+    }
+    int32_t nr=len; fseek(f,8+6*4,SEEK_SET);
+    if(fwrite(&nr,4,1,f)!=1 || fflush(f)!=0){
+        fprintf(stderr,"[KV] record-count update of %s FAILED: keeping the previous %d-record "
+                       "count\n", k->disk_path, k->disk_nrec);
+        fclose(f); return;
+    }
+    fclose(f);
     k->disk_nrec=len;
 }
 static int kv_disk_load(Model *m, int *hist, int maxctx){
@@ -3723,8 +3781,12 @@ out:
     return nrec;
 }
 
-typedef struct { KVState kv; int *hist, len, first; } ServeCtx;
+/* tail: 1 iff hist[len] holds an EMITTED-but-unforwarded token (spec_decode's NGEN-truncation
+ * exit stores the last picked token at all[kv] without forwarding it, so `len` excludes it --
+ * see the \x02MORE handler, 2026-07-21 bug pass). */
+typedef struct { KVState kv; int *hist, len, first, tail; } ServeCtx;
 static double kv_pool_bytes(Model *m, int max_ctx);
+static int ctx_clamp_for_ram(Model *m, double ram_gb, int max_ctx);
 
 static void serve_ctx_init(Model *m, ServeCtx *s, const char *snap, int slot, int maxctx){
     s->kv.kv_start=calloc(m->c.n_layers+1,sizeof(int));
@@ -3767,6 +3829,20 @@ static void run_serve(Model *m, const char *snap){
                                           * distribuzione int4 e' rumore di quantizzazione */
     int ngen=getenv("NGEN")?atoi(getenv("NGEN")):256;
     int maxctx=getenv("CTX")?atoi(getenv("CTX")):4096;
+    { /* clamp CTX against the O(context) per-chunk prefill transient (kvb_all in attention())
+       * plus the per-slot KV pool -- see ctx_clamp_for_ram()'s comment for the exact formula.
+       * Without this, raising CTX silently re-creates the mid-prefill OOM-kill that
+       * ILI_PREFILL_CHUNK was added to fix. ILI_CTX_FORCE=1 skips the clamp. */
+      const char *force=ili_env("CTX_FORCE");
+      if(!(force&&atoi(force))){
+          int c2=ctx_clamp_for_ram(m, getenv("RAM_GB")?atof(getenv("RAM_GB")):0.0, maxctx);
+          if(c2<maxctx){
+              fprintf(stderr,"[RAM] CTX %d -> %d: KV pool + O(context) prefill transient would "
+                             "exceed the RAM budget (ILI_CTX_FORCE=1 to override)\n",maxctx,c2);
+              maxctx=c2;
+          }
+      }
+    }
     int templ=getenv("CHAT_TEMPLATE")?atoi(getenv("CHAT_TEMPLATE")):1;
     g_kvsave = getenv("KVSAVE")?atoi(getenv("KVSAVE")):1;
     int nctx=getenv("KV_SLOTS")?atoi(getenv("KV_SLOTS")):1;
@@ -3784,18 +3860,33 @@ static void run_serve(Model *m, const char *snap){
     printf("\x01\x01" "READY" "\x01\x01\n"); printf("STAT 0 0.00 0.0 %.2f\n", rss_gb()); fflush(stdout);
     while((nr=getline(&line,&cap,stdin))>0){
         if(nr>0 && line[nr-1]=='\n') line[--nr]=0;
-        if(!strcmp(line,"\x02RESET")){ len=0; first=1; if(m->has_mtp) m->kv_start[m->c.n_layers]=-1;
+        if(!strcmp(line,"\x02RESET")){ len=0; first=1; sc->tail=0; if(m->has_mtp) m->kv_start[m->c.n_layers]=-1;
             kv_disk_reset(m);
             printf("\x01\x01" "END" "\x01\x01\n"); printf("STAT 0 0.00 0.0 %.2f\n", rss_gb()); fflush(stdout); continue; }
-        if(!strcmp(line,"\x02MORE")){                /* continua la risposta troncata da NGEN:
-            la storia e' gia' in KV, basta ri-forwardare l'ULTIMO token per riavere i logits */
+        if(!strcmp(line,"\x02MORE")){                /* continua la risposta troncata da NGEN */
             if(len<1){ printf("\x01\x01" "END" "\x01\x01\n"); printf("STAT 0 0.00 0.0 %.2f\n", rss_gb()); fflush(stdout); continue; }
-            int cur=ngen; if(len+cur+g_draft+2>=maxctx) cur=maxctx-len-g_draft-2;
             uint64_t h0=m->hits, ms0=m->miss; double tt0=now_s();
-            float *logit=step(m,hist+len-1,1,len-1);
+            float *logit;
+            if(sc->tail){
+                /* NGEN-truncated turn: hist[len] is the last STREAMED token, emitted but never
+                 * forwarded (spec_decode's truncation exit). Forward it for real so the
+                 * continuation starts AFTER it. The old code re-forwarded hist[len-1] and let
+                 * spec_decode re-pick position len -- under TEMP>0 (serve default 0.7) that
+                 * re-SAMPLES the already-displayed token, silently forking the model's history
+                 * from the visible transcript at every :more boundary (2026-07-21 bug pass). */
+                logit=step(m,hist+len,1,len); len+=1; sc->tail=0;
+            } else {
+                /* turn ended without an unforwarded tail (natural stop / draft-path truncation):
+                 * re-forward the last position to re-derive its logits, as before. */
+                logit=step(m,hist+len-1,1,len-1);
+            }
+            int cur=ngen; if(len+cur+g_draft+2>=maxctx) cur=maxctx-len-g_draft-2;
             EmitStream es={&T,m,now_s(),0,1};
-            int prod=0;
-            if(cur>0) prod=spec_decode(m,hist,len,cur,eos,logit,emit_stream,&es,&len);
+            int prod=0, len0=len;
+            if(cur>0){ prod=spec_decode(m,hist,len,cur,eos,logit,emit_stream,&es,&len);
+                       /* exactly one more emitted token than history positions advanced ==
+                        * spec_decode left a fresh unforwarded tail at hist[len] */
+                       sc->tail=(prod>0 && prod==len-len0+1); }
             else free(logit);
             double tdt=now_s()-tt0; if(tdt<1e-6) tdt=1e-6;
             double dh=(double)(m->hits-h0), dm=(double)(m->miss-ms0);
@@ -3864,10 +3955,15 @@ static void run_serve(Model *m, const char *snap){
             if(templ){ if(first) bl+=snprintf(buf+bl,(1<<16)-bl,"[gMASK]<sop>");
                        bl+=snprintf(buf+bl,(1<<16)-bl,"<|user|>%s<|assistant|>%s",input,tk); }
             else bl+=snprintf(buf+bl,(1<<16)-bl,"%s",input);
+            /* snprintf returns the NEEDED length, not what fit: a pasted line >64 KB pushes
+             * bl past buf's 1<<16 bytes and tok_encode below would read bl bytes -- a heap
+             * over-read. Clamp to the written content (2026-07-21 bug pass). */
+            if(bl>(1<<16)-1) bl=(1<<16)-1;
             k=tok_encode(&T,buf,bl,hist+len,maxctx-len); prompt_tokens=k;
             if(len+k+8+g_draft>=maxctx){ len=0; first=1; kv_disk_reset(m);
                 bl=0; if(templ){ bl+=snprintf(buf+bl,(1<<16)-bl,"[gMASK]<sop><|user|>%s<|assistant|>%s",input,tk); }
                 else bl+=snprintf(buf+bl,(1<<16)-bl,"%s",input);
+                if(bl>(1<<16)-1) bl=(1<<16)-1;   /* same NEEDED-length clamp as above */
                 k=tok_encode(&T,buf,bl,hist,maxctx); if(k>maxctx-8-g_draft) k=maxctx-8-g_draft;
                 prompt_tokens=k;
             }
@@ -3914,10 +4010,13 @@ static void run_serve(Model *m, const char *snap){
         }
         else logit=step(m,hist+len-1,1,len-1);   /* prompt identico/prefisso: rigenera i logits */
         EmitStream es={&T,m,now_s(),0,1};
-        int prod=0;
+        int prod=0, len0=len;
         grammar_reset();                         /* nuova risposta = nuovo documento (MORE invece continua) */
         if(cur>0) prod=spec_decode(m,hist,len,cur,eos,logit,emit_stream,&es,&len);
         else free(logit);
+        /* tail bookkeeping for \x02MORE: emitted count exceeding the history-position advance
+         * by one means spec_decode's truncation exit left hist[len] emitted-but-unforwarded */
+        sc->tail=(cur>0 && prod>0 && prod==len-len0+1);
         double tdt=now_s()-tt0; if(tdt<1e-6) tdt=1e-6;
         double dh=(double)(m->hits-h0), dm=(double)(m->miss-ms0);
         printf("%s\x01\x01" "END" "\x01\x01\n",raw_mode?"":"\n");
@@ -4240,6 +4339,31 @@ static double expert_avail(Model *m, double ram_gb, int ebits, int max_ctx){
     return ram_gb*1e9 - (double)m->resident_bytes - slack;
 }
 
+/* Largest CTX the RAM budget can actually sustain (2026-07-21 bug pass). The binding term is
+ * attention()'s S>4 prefill reconstruction: kvb_all = CTX*n_heads*(qk_nope+v_head)*4 transient
+ * bytes PER CHUNK (Tk = total context so far, NOT the PREFILL_CHUNK size) -- ~112 KB/token at
+ * GLM-5.2 dims (64*448*4) -- plus the per-slot KV pool (kv_pool_bytes: all KV_SLOTS), both
+ * linear in CTX. Everything else (resident weights, ws[64] slabs, activations+page-cache
+ * reserve) is CTX-independent and mirrored from cap_for_ram's own slack accounting. So:
+ *   fit = (budget - resident - 1.2e9 - 2.5e9 - 64*expert_bytes) /
+ *         (kv_pool_bytes(m,1) + n_heads*(qk_nope+v_head)*4)          [bytes/token]
+ * Floor of 1024 keeps the tool usable on tiny machines (run_serve still warns loudly);
+ * ILI_CTX_FORCE=1 at the call site skips the clamp entirely. Deliberately NOT a tiling
+ * rewrite of the prefill path -- this only stops CTX from silently overcommitting. */
+static int ctx_clamp_for_ram(Model *m, double ram_gb, int max_ctx){
+    Cfg *c=&m->c;
+    if(max_ctx<1) return max_ctx;
+    if(ram_gb<=0){ ram_gb=g_mem_avail_boot*0.88; if(ram_gb<4) ram_gb=8; }
+    int64_t eb=expert_bytes_probe(m,m->ebits);
+    double fixed = 1.2e9 + 2.5e9 + 64.0*(double)eb + (double)m->resident_bytes;
+    double per_tok = kv_pool_bytes(m,1)                                   /* KV pool, all slots */
+                   + (double)c->n_heads*(c->qk_nope+c->v_head)*4.0;       /* kvb_all transient  */
+    double left = ram_gb*1e9 - fixed;
+    int fit = (left>0 && per_tok>0) ? (int)(left/per_tok) : 0;
+    if(fit<1024) fit=1024;
+    return max_ctx<fit ? max_ctx : fit;
+}
+
 /* clampa la cache expert a un budget RAM (GB): cap t.c. residente + cache + slack <= budget.
  * ram_gb<=0 -> budget AUTO = 88% della RAM disponibile adesso (lascia respiro a OS+wrapper:
  * sforare = OOM-kill del kernel a meta' generazione, molto peggio di una cache piu' piccola). */
@@ -4283,15 +4407,26 @@ static void cap_for_ram(Model *m, double ram_gb, int ebits, int max_ctx){
         int raise_on = getenv("CAP_RAISE")?atoi(getenv("CAP_RAISE")):1;
         int newcap = capmax>c->n_experts ? c->n_experts : capmax;
         if(raise_on && newcap>m->ecap){
-            for(int i=0;i<=c->n_layers;i++) if(m->ecache[i]){
-                m->ecache[i]=realloc(m->ecache[i],(size_t)newcap*sizeof(ESlot));
-                memset(m->ecache[i]+m->ecap,0,(size_t)(newcap-m->ecap)*sizeof(ESlot));
+            int grew=1;
+            for(int i=0;i<=c->n_layers && grew;i++) if(m->ecache[i]){
+                /* never `p=realloc(p,...)`: on failure that clobbers the pointer (leak) and a
+                 * later moe() resolve would deref NULL with ecn[i]>0 (2026-07-21 bug pass).
+                 * On failure keep the old array+cap -- layers already grown just carry unused
+                 * extra capacity, harmless because m->ecap stays the old minimum. */
+                ESlot *ns=realloc(m->ecache[i],(size_t)newcap*sizeof(ESlot));
+                if(!ns){ grew=0; break; }
+                memset(ns+m->ecap,0,(size_t)(newcap-m->ecap)*sizeof(ESlot));
+                m->ecache[i]=ns;
             }
-            fprintf(stderr,"[RAM_GB=%.1f%s] cap raised %d->%d: budget allows it "
-                "(projected peak %.1f GB; set CAP_RAISE=0 to disable)\n",
-                ram_gb, auto_b?" auto":"", m->ecap, newcap,
-                (m->resident_bytes + (double)newcap*nsp*eb + slack)/1e9);
-            m->ecap=newcap;
+            if(grew){
+                fprintf(stderr,"[RAM_GB=%.1f%s] cap raised %d->%d: budget allows it "
+                    "(projected peak %.1f GB; set CAP_RAISE=0 to disable)\n",
+                    ram_gb, auto_b?" auto":"", m->ecap, newcap,
+                    (m->resident_bytes + (double)newcap*nsp*eb + slack)/1e9);
+                m->ecap=newcap;
+            } else
+                fprintf(stderr,"[RAM_GB=%.1f%s] cap raise %d->%d aborted: realloc failed; "
+                    "keeping cap=%d\n", ram_gb, auto_b?" auto":"", m->ecap, newcap, m->ecap);
         } else
             fprintf(stderr,"[RAM_GB=%.1f%s] cap=%d ok (projected peak %.1f GB)\n", ram_gb, auto_b?" auto":"", m->ecap,
                 (m->resident_bytes + (double)m->ecap*nsp*eb + slack)/1e9);
