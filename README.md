@@ -4,7 +4,7 @@
 
 **Tiny engine, immense model.** Run **GLM-5.2 (744B-parameter MoE)** as a local agent and daily driver — in pure C, with zero dependencies, by streaming experts from disk. Primary target: an M5 Max MacBook Pro with 128 GB of unified memory.
 
-**Part of a two-tier local-inference family:** iliria is the deep-reasoning tier — its siblings are **[trailbrake](https://github.com/PhilipJohnBasile/trailbrake)** (the fast MLX tier) and **[racecontrol](https://github.com/PhilipJohnBasile/racecontrol)** (the OpenAI-compatible router that pairs them).
+**Part of a two-tier local-inference family:** iliria is the deep-reasoning tier — its siblings are **[trailbrake](https://github.com/PhilipJohnBasile/trailbrake)** (the fast MLX tier) and **[racecontrol](https://github.com/PhilipJohnBasile/racecontrol)** (the OpenAI-compatible router that pairs them). Its Apple **Foundation Models** integration — the engines as FM providers, and Apple's on-device/Private Cloud Compute models as router tiers — is **[iliria-fm](https://github.com/PhilipJohnBasile/iliria-fm)**.
 
 
 ## Project status (2026-07-15)
