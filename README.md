@@ -90,7 +90,9 @@ budget without starting the engine (warnings exit 0, blockers exit 1).
 
 A pre-converted **GLM-5.2 int4** model for iliria is available on Hugging Face — **use the version with the int8 MTP heads**:
 
-**https://huggingface.co/mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp**
+**https://huggingface.co/philipjohnbasile/GLM-5.2-colibri-int4-with-int8-mtp**
+
+(Mirror: [mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp](https://huggingface.co/mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp) — same int8 MTP heads.)
 
 > ⚠️ **The MTP head must be int8.** The original mirror ([jlnsrk/GLM-5.2-colibri-int4](https://huggingface.co/jlnsrk/GLM-5.2-colibri-int4)) ships **int4** MTP heads, which give **0% draft acceptance** — speculation silently never engages ([#8](https://github.com/JustVugg/colibri/issues/8), [#102](https://github.com/JustVugg/colibri/issues/102)). Check what you have: `ls -l <model>/out-mtp-*` — int8 (correct): `3527131672 / 5366238584 / 1065950496`; int4: `1765523544 / 2686077736 / 536747200` (replace just those three files from the int8 mirror). Note that on the M5 Max streamed path MTP is measured slower end-to-end and defaults off (`DRAFT=0`) — the int8 head matters on hardware where verification isn't I/O-bound, and keeps the option honest everywhere.
 
