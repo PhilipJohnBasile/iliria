@@ -5,7 +5,7 @@ no engine run — the sibling engine layer-pruning sweep has the GPU. Every numb
 recomputed from `.fa_usage` histograms and `FAROUTE1` route traces already sitting in
 `c/bench-m5max/`, (b) lifted from this project's own existing verdicts
 (the offline math-verdict record, `docs/PERFORMANCE_THEORY.md`,
-`(a sibling MLX engine) the model-surgery frontier notes §2.3), or (c) fresh web/HF
+the model-surgery frontier notes §2.3), or (c) fresh web/HF
 recon on the community GLM-5.2 REAP checkpoints. Where a number required an actual pruned
 checkpoint or new engine instrumentation, that is stated explicitly and deferred, not guessed.
 
@@ -190,7 +190,7 @@ history) in the entire investigation.
 
 ### 2.1 The mechanism correction (do not skip this)
 
-The task framing this document was commissioned under states: *"expert pruning removes
+The framing under study here states: *"expert pruning removes
 experts = fewer expert bytes streamed per token... directly faster decode."* **This is
 mechanistically incorrect, and this project's own survey already found and corrected the
 same error** (the model-surgery frontier notes §2.3(c), citing NAEE, arXiv:2402.14800 directly):
@@ -441,8 +441,7 @@ invest in an in-house REAP computation (§3.3) or a from-scratch prune+heal buil
 ## Sources
 
 **In-repo (verified by direct read/recompute this pass):**
-- `(a sibling MLX engine) the model-surgery frontier notes §2.3 (the source survey this
-  task was commissioned against)
+- the model-surgery frontier notes §2.3 (the source survey underlying this analysis)
 - the offline math-verdict record Study 2 (routing-mass/saliency),
   Study 1 & 5 (hit-rate fits), Study 4 (miss-bytes/hit-rate at varying k)
 - `docs/PERFORMANCE_THEORY.md` (Jaccard/memorylessness, pin-scaling,
