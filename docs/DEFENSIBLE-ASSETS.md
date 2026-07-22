@@ -16,7 +16,7 @@ jobs actively committing during normal operation (long encodes, overnight
 matrices) — treat any specific HEAD hash as a snapshot, not a constant; the
 per-claim commits cited in section (d) are the stable references.
 
-A sibling fast-tier engine (not yet public) shares the falsifier methodology described in (b).
+A sibling fast-tier engine ([trailbrake](https://github.com/PhilipJohnBasile/trailbrake)) shares the falsifier methodology described in (b).
 
 ## (a) The measurement corpus
 
