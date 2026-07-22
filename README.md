@@ -19,7 +19,10 @@ measurement, but not yet run through that same matrix (see docs/PERFORMANCE_THEO
 Verdicts so far: PILOT K6 prefetch **reverted** (−6.96%), smarter eviction **dead** (−26%, zero
 hit change), Metal 4 **+2%** (provisional), DSA sparse indexer **opt-in only** (disqualifies the
 Metal prefill kernel — combined they're 4.9× *slower*), MTP / static pinning / hotset training /
-hetero CPU MoE / cross-request expert self-speculation all measured dead. The cache-policy
+hetero CPU MoE / cross-request expert self-speculation all measured dead; **inter-expert read
+coalescing / profile-guided expert layout dead at this block size** (each expert is already ONE
+coalesced ~19 MB pread issued concurrently — merging the residual 0.22% scale preads measured
+**1.33% of decode wall-clock**, NO-GO vs the ±5% bar; see `c/bench-m5max/step0-iokind-diag/`). The cache-policy
 frontier is closed: capacity vs reuse distance is the wall. The first `ili bench` quality
 baseline has now run: **62.5% mean acc_norm** (HellaSwag/ARC/MMLU, n=40/task — small-n, see
 "Quality benchmark" below). The saliency-aware int4/int2 mixed-precision expert container's
