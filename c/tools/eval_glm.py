@@ -173,7 +173,15 @@ def main():
             print(eline, file=sys.stderr)
     lines = [l for l in proc.stdout.strip().splitlines() if l and l[0] in "-0123456789"]
     if len(lines) != len(reqs):
-        print(f"WARNING: {len(lines)} outputs for {len(reqs)} requests", file=sys.stderr)
+        # HARD failure, not a warning: lp[] below is zipped to meta/reqs by POSITION
+        # (score_accuracy indexes lp[r] using indices built from reqs' own order), so a
+        # count mismatch means every downstream score is either an IndexError away from
+        # crashing or -- worse -- silently attributed to the WRONG question/option. Refuse
+        # to guess; a future engine/stdout-format change must not be able to silently
+        # corrupt a quality-gate verdict this way.
+        sys.exit(f"FATAL: engine produced {len(lines)} score line(s) for {len(reqs)} request(s) "
+                 "-- refusing to score with a misaligned request/output mapping. Check the "
+                 "ENGINE ERROR output above (if any) and glm's stdout format, then rerun.")
     lp = [float(l.split()[0]) for l in lines]
     print(f"(engine: {time.time()-t0:.0f}s){proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else ''}", file=sys.stderr)
     score_accuracy(tasks, meta, perq, lp, dump_per_item=a.dump_per_item or None)

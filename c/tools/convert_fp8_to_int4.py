@@ -26,7 +26,7 @@ USO:
   # reale: scarica+converte+cancella shard per shard
   python3 tools/convert_fp8_to_int4.py --repo zai-org/GLM-5.2-FP8 --outdir ~/models/glm52_i4
 """
-import os, sys, glob, json, shutil, argparse
+import os, sys, glob, json, shutil, struct, argparse
 import numpy as np
 
 # ---------- quantizzazione: identica al C (glm.c) ----------
@@ -177,6 +177,64 @@ def convert_shard(path, out_dict, n_layers, ebits, io_bits, xbits, keep_mtp=Fals
 
 def free_gb(p): return shutil.disk_usage(p).free / 1e9
 
+def verify_shard_file(path):
+    """Structural resume-safety check for an output shard: True only if `path`
+    exists, is a well-formed safetensors file, and its header's declared
+    tensor byte ranges exactly account for the whole file. `os.path.exists()`
+    alone cannot distinguish a complete shard from one truncated by a killed
+    process mid-write (safetensors.numpy.save_file() is NOT atomic -- it
+    writes directly to the target path with no temp-file+rename, see
+    save_file()'s own tmp+os.replace() wrapper below, which is what actually
+    makes THIS tool's own resume safe going forward). Cheap: one header-only
+    parse + one stat, no torch/safetensors import needed."""
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8)
+            if len(head) != 8:
+                return False
+            (hlen,) = struct.unpack("<Q", head)
+            header_bytes = f.read(hlen)
+            if len(header_bytes) != hlen:
+                return False
+            header = json.loads(header_bytes)
+    except Exception:
+        return False
+    header.pop("__metadata__", None)
+    if not header:
+        return False
+    try:
+        max_end = max(int(meta["data_offsets"][1]) for meta in header.values())
+    except (KeyError, ValueError, TypeError, IndexError):
+        return False
+    expected_size = 8 + hlen + max_end
+    try:
+        actual_size = os.path.getsize(path)
+    except OSError:
+        return False
+    return actual_size == expected_size
+
+
+def save_file_atomic(tensors, outp):
+    """Atomic replacement for safetensors.numpy.save_file(tensors, outp):
+    writes to a sibling `.tmp` file, structurally self-verifies it (catches a
+    kill mid-write), then os.replace()s it into place -- so `outp` only ever
+    exists as a complete file, matching build_mixed_container.py's /
+    encode_mode15_container.py's tmp+rename+self-verify convention. Raises
+    SystemExit (not a silent skip) if the just-written file fails
+    verification: a shard that cannot even round-trip its own header is a
+    bug worth stopping the run for, not quietly retrying forever."""
+    from safetensors.numpy import save_file
+    tmp_out = outp + ".tmp"
+    save_file(tensors, tmp_out)
+    if not verify_shard_file(tmp_out):
+        try: os.remove(tmp_out)
+        except OSError: pass
+        raise SystemExit(f"{outp}: just-written shard failed structural self-verification "
+                          "-- aborting (this should never happen; investigate before rerunning)")
+    os.replace(tmp_out, outp)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=None)
@@ -229,11 +287,10 @@ def main():
     os.makedirs(a.outdir, exist_ok=True)
     if a.indir:    # conversione locale (test)
         shards = sorted(glob.glob(os.path.join(a.indir, "*.safetensors")))
-        from safetensors.numpy import save_file
         for i, sp in enumerate(shards):
             out = {}; convert_shard(sp, out, a.n_layers, a.ebits, a.io_bits, a.xbits,
                                     int2_variant=a.int2_quantizer)
-            save_file(out, os.path.join(a.outdir, f"out-{i:05d}.safetensors"))
+            save_file_atomic(out, os.path.join(a.outdir, f"out-{i:05d}.safetensors"))
         # copia config + tokenizer
         for fn in ["config.json"]:
             src = os.path.join(a.indir, fn)
@@ -430,7 +487,6 @@ def main():
               f"({sz/dt/1e6:.1f} MB/s avg, {nres} resumes)", flush=True)
         return out
 
-    from safetensors.numpy import save_file
     import time as _t
     for att in range(999):
         try:
@@ -456,12 +512,16 @@ def main():
         print(f"[MTP] head at layer {a.n_layers}: {len(mtp_shards)} shards to process: {mtp_shards}")
         for i, sh in enumerate(mtp_shards):
             outp = os.path.join(a.outdir, f"out-mtp-{i:05d}.safetensors")
-            if os.path.exists(outp): print(f"[MTP] {outp} already done"); continue
+            if verify_shard_file(outp):
+                print(f"[MTP] {outp} already done"); continue
+            if os.path.exists(outp):
+                print(f"[MTP] {outp} exists but failed structural verification "
+                      "(truncated/corrupt from an interrupted run) -- rebuilding", flush=True)
             print(f"[MTP {i+1}/{len(mtp_shards)}] downloading {sh}...", flush=True)
             p = download_retry(a.repo, sh, tmp)
             out = {}; convert_shard(p, out, a.n_layers, a.ebits, a.io_bits, a.xbits, keep_mtp=True,
                                     int2_variant=a.int2_quantizer)
-            save_file(out, outp)
+            save_file_atomic(out, outp)
             os.remove(p)
             for blob in glob.glob(os.path.join(tmp, "**", "*"), recursive=True):
                 if os.path.isfile(blob): os.remove(blob)
@@ -477,12 +537,15 @@ def main():
         print(f"[IDX] indexer weights across {len(idx_shards)} shards (~{tot_gb:.0f} GB total download, resumable)")
         for i, sh in enumerate(idx_shards):
             outp = os.path.join(a.outdir, f"out-idx-{i:05d}.safetensors")
-            if os.path.exists(outp): continue             # gia' fatto -> ripartibile
+            if verify_shard_file(outp): continue           # gia' fatto -> ripartibile
+            if os.path.exists(outp):
+                print(f"[IDX] {outp} exists but failed structural verification "
+                      "(truncated/corrupt from an interrupted run) -- rebuilding", flush=True)
             print(f"[IDX {i+1}/{len(idx_shards)}] downloading {sh}...", flush=True)
             p = download_retry(a.repo, sh, tmp)
             out = {}; convert_shard(p, out, a.n_layers, a.ebits, a.io_bits, a.xbits, keep_idx=True,
                                     int2_variant=a.int2_quantizer)
-            if out: save_file(out, outp)
+            if out: save_file_atomic(out, outp)
             os.remove(p)
             for blob in glob.glob(os.path.join(tmp, "**", "*"), recursive=True):
                 if os.path.isfile(blob): os.remove(blob)
@@ -492,12 +555,15 @@ def main():
         if free_gb(a.outdir) < a.min_free_gb:
             print(f"STOP: free space is below {a.min_free_gb} GB. Free space and rerun to resume."); break
         outp = os.path.join(a.outdir, f"out-{i:05d}.safetensors")
-        if os.path.exists(outp): continue                 # gia' fatto -> ripartibile
+        if verify_shard_file(outp): continue               # gia' fatto -> ripartibile
+        if os.path.exists(outp):
+            print(f"[{i+1}/{len(shards)}] {outp} exists but failed structural verification "
+                  "(truncated/corrupt from an interrupted run) -- rebuilding", flush=True)
         print(f"[{i+1}/{len(shards)}] downloading {sh} ({free_gb(a.outdir):.0f} GB free)...", flush=True)
         p = download_retry(a.repo, sh, tmp)
         out = {}; convert_shard(p, out, a.n_layers, a.ebits, a.io_bits, a.xbits,
                                 int2_variant=a.int2_quantizer)
-        save_file(out, outp)
+        save_file_atomic(out, outp)
         os.remove(p)                                       # <-- cancella subito lo shard fp8
         for blob in glob.glob(os.path.join(tmp, "**", "*"), recursive=True):
             if os.path.isfile(blob): os.remove(blob)

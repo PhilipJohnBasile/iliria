@@ -127,13 +127,21 @@ printf 'arm\tmode\tmetal_prefill\tjson\tquiesce_before\tquiesce_after\tserve_log
 log "attempt_id=$ATTEMPT_ID dry_run=$DRY_RUN out=$OUT model_dir=$MODEL_DIR prefill_chunk=$PREFILL_CHUNK port=$PORT"
 
 # ---- provenance manifest (executable-provenance system, scripts/provenance.sh) -------------
-# One manifest for the whole matrix (all 4 arms share the same on-disk binary/model dir within
-# a single invocation of this script); provenance_compare.py --vary ILI_METAL_PREFILL is the
-# gate that gets run ACROSS arms afterward (see tools/provenance_compare.py).
-if ! bash "$CDIR/scripts/provenance.sh" --attempt-id "$ATTEMPT_ID" --binary "$PROV_BINARY" \
-       --model-dir "$MODEL_DIR" --artifact-dir "$OUT" \
+# Snapshotted BEFORE arm 1 (PRE) and again AFTER arm 4 (POST -- see the PROVENANCE GATE block
+# right after the arm loop below). Distinct attempt-ids (${ATTEMPT_ID}-provpre / -provpost):
+# provenance.sh's own same-attempt-id-overwrites convention would otherwise clobber the PRE
+# snapshot the moment POST is written, leaving nothing to diff against. provenance_compare.py
+# between PRE and POST is the actual automated cross-run gate (no --vary needed -- see the
+# PROVENANCE GATE block for why): it verifies the SAME binary/generated-source/model-container
+# was in place for the WHOLE ~2.5h run, catching a rebuild, binary swap, or model-dir mutation
+# mid-matrix that would otherwise silently invalidate every arm's comparison.
+PROV_PRE=""
+PROV_PRE_RC=0
+PROV_PRE="$(bash "$CDIR/scripts/provenance.sh" --attempt-id "${ATTEMPT_ID}-provpre" \
+       --binary "$PROV_BINARY" --model-dir "$MODEL_DIR" --artifact-dir "$OUT" \
        --quiesce-bin "$SCRIPT_DIR/quiesce_check.sh" \
-       --prompt-file "$SCRIPT_DIR/abba_transcript_driver.py"; then
+       --prompt-file "$SCRIPT_DIR/abba_transcript_driver.py")" || PROV_PRE_RC=$?
+if [[ "$PROV_PRE_RC" != 0 || -z "$PROV_PRE" ]]; then
   if [[ "$DRY_RUN" == 1 ]]; then
     log "provenance manifest emission FAILED -- continuing anyway (--dry-run has no engine at risk)"
   else
@@ -263,7 +271,12 @@ snapshot_usage() {
   USAGE_FILES=()
   for f in "$MODEL_DIR/.fa_usage" "$MODEL_DIR/.fa_usage.$PROFILE"; do
     if [[ -f "$f" ]]; then
-      cp "$f" "$snap_dir/$(basename "$f")"
+      # -p: preserve mtime (and mode) across the snapshot/restore round trip, not just bytes.
+      # Without it, every restore stamps a fresh "now" mtime, so even a byte-perfect restore
+      # still changes the file's (name,size,mtime) fingerprint that provenance_manifest.py's
+      # container_manifest_hash uses -- which would make the PROVENANCE GATE below (PRE vs
+      # POST container_manifest_hash) false-positive FAIL on every normal, uneventful run.
+      cp -p "$f" "$snap_dir/$(basename "$f")"
       USAGE_FILES+=("$f")
     fi
   done
@@ -272,7 +285,7 @@ restore_usage() {
   local snap_dir="$1" f
   (( ${#USAGE_FILES[@]} )) || return 0
   for f in "${USAGE_FILES[@]}"; do
-    cp "$snap_dir/$(basename "$f")" "$f"
+    cp -p "$snap_dir/$(basename "$f")" "$f"
   done
 }
 
@@ -416,6 +429,49 @@ for i in 1 2 3 4; do
   log "arm $i/4 complete"
 done
 
+# ---- provenance gate: verify nothing drifted across the whole ~2.5h run ---------------------
+# The actual automated cross-run check the header comment above (and, historically, this
+# block's own comment) used to merely CLAIM ran via `provenance_compare.py --vary
+# ILI_METAL_PREFILL` without ever invoking it. No --vary is needed: every arm sets
+# ILI_METAL_PREFILL as a per-COMMAND env override on run-m5max-serve.sh (see the `env`-prefixed
+# invocation inside the arm loop above), never exported into THIS script's own ambient
+# environment, so neither the PRE nor the POST manifest's launcher_env ever observes it -- PRE
+# and POST are expected to agree on EVERY field except provenance_compare.py's own
+# ALWAYS_IGNORED bookkeeping set (timestamps, attempt_id, manifest_path, quiesce output,
+# launcher_env_digest). Non-fatal mid-run (never aborts an in-flight or already-collected arm);
+# a failure here only affects this script's FINAL exit code, checked after results.md is
+# written further down, so a provenance-gate failure is reported loudly but never discards
+# ~2.5h of already-collected data.
+PROVENANCE_GATE_RC=0
+if [[ -n "$PROV_PRE" ]]; then
+  PROV_POST=""
+  PROV_POST_RC=0
+  PROV_POST="$(bash "$CDIR/scripts/provenance.sh" --attempt-id "${ATTEMPT_ID}-provpost" \
+         --binary "$PROV_BINARY" --model-dir "$MODEL_DIR" --artifact-dir "$OUT" \
+         --quiesce-bin "$SCRIPT_DIR/quiesce_check.sh" \
+         --prompt-file "$SCRIPT_DIR/abba_transcript_driver.py")" || PROV_POST_RC=$?
+  if [[ "$PROV_POST_RC" != 0 || -z "$PROV_POST" ]]; then
+    log "provenance POST manifest emission FAILED -- cannot run the cross-run provenance gate " \
+        "(recorded, non-fatal: the PRE manifest and all arm results are still on disk)"
+    PROVENANCE_GATE_RC=1
+  else
+    PROV_GATE_TXT="$OUT/system/${ATTEMPT_ID}-provenance-gate.txt"
+    if python3 "$CDIR/tools/provenance_compare.py" --a "$PROV_PRE" --b "$PROV_POST" \
+         > "$PROV_GATE_TXT" 2>&1; then
+      log "provenance gate: PASS -- binary/generated-source/model-container identical PRE vs POST (see $PROV_GATE_TXT)"
+    else
+      PROVENANCE_GATE_RC=$?
+      log "provenance gate: FAIL -- PRE and POST manifests disagree (see $PROV_GATE_TXT); this " \
+          "run's binary/source/container may have changed mid-matrix -- treat all 4 arms as " \
+          "UNVERIFIED, not automatically invalid"
+      cat "$PROV_GATE_TXT" >&2
+    fi
+  fi
+else
+  log "provenance gate: SKIPPED (no PRE manifest -- see the emission failure logged at matrix start)"
+  PROVENANCE_GATE_RC=1
+fi
+
 python3 - "$MANIFEST_TSV" "$OUT/manifest.json" "$ATTEMPT_ID" "$PREFILL_CHUNK" "$DRY_RUN" <<'PY'
 import csv, json, sys
 src, dst, attempt_id, prefill_chunk, dry_run = sys.argv[1:]
@@ -434,3 +490,15 @@ python3 "$SCRIPT_DIR/abba_transcript_driver.py" summarize \
   --manifest "$OUT/manifest.json" --result-dir "$OUT" --out "$RESULTS_MD"
 
 log "matrix complete: $RESULTS_MD"
+
+# Provenance-gate failures are non-fatal mid-run (see the PROVENANCE GATE block above) so the
+# ~2.5h of already-collected arm data and results.md are never discarded -- but a real (non
+# --dry-run) run must still exit nonzero so a caller/CI cannot mistake an UNVERIFIED result for
+# a clean one. --dry-run keeps exit 0 regardless, matching this script's existing philosophy
+# that provenance problems never fail the mock flow (no engine/hardware is at risk in a dry run).
+if [[ "$PROVENANCE_GATE_RC" != 0 && "$DRY_RUN" == 0 ]]; then
+  log "FATAL-AFTER-THE-FACT: provenance gate did not pass -- see " \
+      "$OUT/system/${ATTEMPT_ID}-provenance-gate.txt (or the emission-failure log above). " \
+      "Results are on disk but NOT provenance-verified."
+  exit 5
+fi

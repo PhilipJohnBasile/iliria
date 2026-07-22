@@ -36,15 +36,36 @@ printf 'prompt\tcache_state\ttrial\tmode\tlog\n' > "$MANIFEST_TSV"
 USAGE_SNAP_DIR="$OUT/system/usage-snapshot"
 mkdir -p "$USAGE_SNAP_DIR"
 usage_files=()
-for f in "$MODEL_DIR/.fa_usage" "$MODEL_DIR/.fa_usage.$PROFILE"; do
-  if [[ -f "$f" ]]; then
-    cp "$f" "$USAGE_SNAP_DIR/$(basename "$f")"
-    usage_files+=("$f")
-  fi
-done
+# (Re-)populate usage_files/USAGE_SNAP_DIR from whatever .fa_usage[.<profile>]
+# exists on disk RIGHT NOW. Returns 1 (nothing found) / 0 (snapshotted).
+snapshot_usage() {
+  local f found=1
+  for f in "$MODEL_DIR/.fa_usage" "$MODEL_DIR/.fa_usage.$PROFILE"; do
+    if [[ -f "$f" ]]; then
+      cp "$f" "$USAGE_SNAP_DIR/$(basename "$f")"
+      usage_files+=("$f")
+      found=0
+    fi
+  done
+  return "$found"
+}
+if ! snapshot_usage; then
+  echo "[ab-m5max-k6] WARNING: no .fa_usage[.${PROFILE}] found under $MODEL_DIR at matrix " \
+       "start (fresh model dir / AUTOPIN has never run here) -- restore_usage would otherwise " \
+       "be a silent permanent no-op for the WHOLE matrix, defeating the frozen-state hash-gate " \
+       "guarantee above. Falling back to a LAZY snapshot on the first run_case that finds one: " \
+       "the run that FIRST creates .fa_usage establishes the baseline and is itself unprotected; " \
+       "every run after that is frozen relative to it. For full protection, run the engine once " \
+       "on this model dir first so .fa_usage[.${PROFILE}] pre-exists." >&2
+fi
 restore_usage() {
   local f
-  (( ${#usage_files[@]} )) || return 0
+  # Empty usage_files means either (a) nothing has been snapshotted yet (the
+  # fresh-dir case the WARNING above describes -- try the lazy snapshot now,
+  # since a prior run_case in this same matrix may have just created
+  # .fa_usage), or (b) truly nothing exists anywhere yet, in which case
+  # snapshot_usage fails again and this is correctly still a no-op.
+  (( ${#usage_files[@]} )) || snapshot_usage || return 0
   for f in "${usage_files[@]}"; do
     cp "$USAGE_SNAP_DIR/$(basename "$f")" "$f"
   done

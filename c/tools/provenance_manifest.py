@@ -19,12 +19,24 @@ Manifest schema (see build_manifest() and c/tests/test_provenance.py's completen
     {bin, skipped, pass, exit_code, output[]}, manifest_path.
 
 container_manifest_hash: sha256 over "config.json=<sha256 or 'absent'>" plus the sorted
-top-level (name, size, mtime) listing of every regular file directly inside model_dir --
-NEVER shard bytes (reading real GLM-5.2 shards would cost minutes, not milliseconds; the
-listing is enough to detect any change to the container directory's contents). This
-deliberately includes every top-level file, not only weight-shard-looking names, so a
-changed config.json, .fa_usage, or any other container-directory file is caught without
-guessing at a shard-naming convention this module has no way to verify independently.
+top-level (name, size, content-digest) listing of every regular file directly inside
+model_dir. The content-digest is a REAL content check, not (name, size, mtime): small files
+(config.json, .fa_usage[.profile], tokenizer files) are hashed in full; anything larger
+(weight shards, which can be multi-GB) is hashed over its first+last 4 MiB only -- bounded
+I/O regardless of file size, so this stays cheap even for a several-hundred-GB container
+directory (reading every shard's FULL bytes, every time, really would cost minutes, not
+milliseconds -- see _file_content_digest()'s own docstring for the exact bound and its one
+known blind spot: a change confined entirely to the untouched middle of a file larger than
+8 MiB is not caught). This is NOT a cryptographic guarantee over arbitrary tampering the way
+whole-file hashing would be, but it does catch the failure mode a pure size+mtime proxy
+cannot: a same-size, different-bytes rewrite (e.g. swapping --int2-quantizer variants, see
+build_mixed_container.py / convert_fp8_to_int4.py) landing within the same wall-clock second,
+which mtime-to-the-second alone is blind to. This deliberately includes every top-level file,
+not only weight-shard-looking names, so a changed config.json, .fa_usage, or any other
+container-directory file is caught without guessing at a shard-naming convention this module
+has no way to verify independently. A file this process cannot read (permission-denied,
+mid-rotation, ...) falls back to a distinct "unreadable" marker rather than raising, so it
+cannot crash provenance recording.
 
 launcher_env scope: every ILI_*/COLI_*/FA_* environment variable, sorted by name -- mirrors
 c/ili's own documented env convention exactly (`_env()`: "silent legacy fallback: ILI_* >
@@ -49,6 +61,7 @@ import effective_flags  # noqa: E402  (centralized ILI_/COLI_/FA_ resolution, se
 GENERATED_SOURCE_CANDIDATES = ("glm_m5max.c", "backend_metal_m5max.mm")
 ENV_PREFIXES = ("ILI_", "COLI_", "FA_")
 _HASH_CHUNK = 1 << 20
+_SAMPLE_BYTES = 4 << 20  # 4 MiB: see _file_content_digest()
 
 
 def _now_iso() -> str:
@@ -65,6 +78,44 @@ def sha256_file(path) -> str:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _file_content_digest(path, size) -> str:
+    """Content-aware digest for compute_container_manifest_hash(): sha256 of the WHOLE file
+    when it's small enough that doing so is cheap (config.json, .fa_usage[.profile],
+    tokenizer files -- all KB-scale), else sha256 of just its first+last _SAMPLE_BYTES --
+    bounded I/O regardless of file size, so this stays a milliseconds-not-minutes operation
+    even for a several-hundred-GB container directory (see the module docstring's own
+    "reading every shard's FULL bytes...would cost minutes" rationale).
+
+    This is a REAL content check, not (name, size, mtime): a same-size rewrite (e.g. swapping
+    --int2-quantizer variants in build_mixed_container.py / convert_fp8_to_int4.py, which
+    changes only the per-row F32 `.qs` scale bytes) changes this digest, unlike the old
+    size+mtime-to-the-second proxy, which could not tell the two apart at all if the rewrite
+    happened within the same wall-clock second. quant_container.st_save()'s own convention
+    (every F32 tensor, including every `.qs`, serialized FIRST) puts exactly the bytes a
+    routine requantization changes at the very front of any shard build_mixed_container.py /
+    encode_mode15_container.py rewrite -- well inside the leading _SAMPLE_BYTES sample.
+
+    NOT a full guarantee over arbitrary tampering: a change confined entirely to the
+    untouched MIDDLE of a file larger than 2*_SAMPLE_BYTES would not be caught; hash the
+    whole file instead if that guarantee is ever actually required here.
+
+    A file this process cannot read (permission-denied, mid-rotation, ...) must not crash
+    provenance recording -- falls back to a distinct "unreadable" marker rather than raising."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            if size <= 2 * _SAMPLE_BYTES:
+                for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
+                    h.update(chunk)
+            else:
+                h.update(fh.read(_SAMPLE_BYTES))
+                fh.seek(-_SAMPLE_BYTES, os.SEEK_END)
+                h.update(fh.read(_SAMPLE_BYTES))
+        return h.hexdigest()
+    except OSError as exc:
+        return f"unreadable:{type(exc).__name__}"
 
 
 def compute_generated_source_sha256(c_dir) -> dict:
@@ -93,8 +144,8 @@ def compute_container_manifest_hash(model_dir):
     for name in sorted(os.listdir(model_dir)):
         full = os.path.join(model_dir, name)
         if os.path.isfile(full):
-            st = os.stat(full)
-            lines.append(f"{name}\t{st.st_size}\t{int(st.st_mtime)}")
+            size = os.path.getsize(full)
+            lines.append(f"{name}\t{size}\t{_file_content_digest(full, size)}")
     canonical = "\n".join(lines).encode("utf-8")
     return sha256_bytes(canonical)
 

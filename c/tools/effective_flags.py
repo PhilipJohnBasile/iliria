@@ -28,9 +28,15 @@ CLI:
       GPU-accelerated time).
 """
 import os
+import re
 import sys
 
 _PREFIXES = ("ILI_", "COLI_", "FA_")
+
+# atoi()'s real C prefix-parse: optional leading whitespace, an optional sign,
+# then the LEADING run of decimal digits (stopping at the first non-digit,
+# trailing garbage ignored). No match at all == atoi's "0 if no digits found".
+_ATOI_RE = re.compile(r"^[ \t\n\v\f\r]*([+-]?\d+)")
 
 
 def ili_env(name, env=None):
@@ -55,15 +61,29 @@ def which_alias(name, env=None):
 
 
 def truthy(v):
-    """Mirrors glm.c's `atoi(ili_env(...))` truthiness check: unset/None is false,
-    everything else is int(v) != 0, and atoi's own contract makes a non-numeric string
-    parse as 0 (false) rather than raising."""
+    """Mirrors glm.c's `atoi(ili_env(...))` truthiness check EXACTLY: unset/None is
+    false; otherwise this replicates real C atoi() semantics via _ATOI_RE -- skip
+    leading whitespace, an optional sign, then consume the LEADING run of decimal
+    digits and stop at the first non-digit (ignoring any trailing garbage), 0 if no
+    digits were found at all.
+
+    This is deliberately NOT `int(v.strip()) != 0` guarded by a ValueError catch:
+    that requires the WHOLE (stripped) string to be a clean Python int literal,
+    which is a stricter, DIFFERENT rule than atoi()'s prefix-parse-and-stop. They
+    diverge on any value with a numeric prefix followed by non-digit trailing
+    content -- e.g. atoi("1x") == 1 and atoi("1.5") == 1 in C (both truthy), but
+    `int("1x")`/`int("1.5")` both raise ValueError, so the old implementation
+    returned False for both. That silently defeated check_metal_prefill_guard()
+    below for exactly the values it exists to catch: ILI_METAL_PREFILL="1x" (or
+    "1.5", etc.) with ILI_METAL unset would atoi()-truthily enable prefill-without-
+    metal in the real engine, while the old truthy() reported it as falsy and let
+    the guard wave the launch through."""
     if v is None:
         return False
-    try:
-        return int(v.strip()) != 0
-    except ValueError:
+    m = _ATOI_RE.match(v)
+    if not m:
         return False
+    return int(m.group(1)) != 0
 
 
 def check_metal_prefill_guard(env=None):
