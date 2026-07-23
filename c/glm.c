@@ -1418,6 +1418,16 @@ static double g_a2_issue=0, g_a2_comp[64], g_a2_load_end=0, g_a2_cs=0;
 static int g_a2_nmiss=0, g_a2_nb=0; static int64_t g_a2_bytes=0;
 static FILE *g_moe_dump=NULL;                      /* ILI_MOE_INPUT_DUMP: per-position expert-input capture (gate 3) */
 static int g_moe_dump_layers[8], g_moe_dump_nlayers=0;   /* ILI_MOE_INPUT_DUMP_LAYERS filter; empty=all layers */
+/* PROBE_TRACE=path: per-(layer,pos) top-16 SELECTION dump (JSONL) for the
+ * cross-engine routing-alignment certificate (glm52-teacher-forced-probe/v1,
+ * colibri#119). Emits choice[] = sigmoid(router logit) + e_score_correction_bias
+ * -- the SELECTION score, NOT the gating weight -- rank-ordered top-16 with
+ * local expert ids (0..E-1), keyed by absolute layer. Position is a per-layer
+ * counter: valid for a single one-shot prefill pass (the probe's only use).
+ * CPU routing path only (the Metal pre-routing branch has no choice[] scores);
+ * probe runs are CPU-only builds, where that branch cannot be taken. */
+static FILE *g_probe_fp=NULL;
+static int g_probe_poscnt[128]={0};
 static void io_delay_inject(void){
     int total = g_io_delay_us + (g_decode_phase ? g_io_delay_decode_us : 0);
     if(total<=0) return;
@@ -2482,6 +2492,19 @@ static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out){
         const float *xs=x+(int64_t)s*D;
         matmul(logit, xs, l->router, 1, D, E);
         for(int e=0;e<E;e++){ logit[e]=sigmoidf(logit[e]); choice[e]=logit[e]+l->router_bias[e]; }
+        if(g_probe_fp && layer<128){
+            int pos=g_probe_poscnt[layer]++;
+            int tid[16]; float tsc[16];
+            for(int r=0;r<16;r++){ int best=-1; float bv=-1e30f;
+                for(int e=0;e<E;e++){ int used=0; for(int j=0;j<r;j++) if(tid[j]==e){used=1;break;}
+                    if(!used && choice[e]>bv){bv=choice[e];best=e;} }
+                tid[r]=best; tsc[r]=choice[best]; }
+            fprintf(g_probe_fp,"{\"abs_layer\":%d,\"pos\":%d,\"topk\":[",layer,pos);
+            for(int r=0;r<16;r++) fprintf(g_probe_fp,"%s%d",r?",":"",tid[r]);
+            fprintf(g_probe_fp,"],\"scores\":[");
+            for(int r=0;r<16;r++) fprintf(g_probe_fp,"%s%.9g",r?",":"",(double)tsc[r]);
+            fprintf(g_probe_fp,"]}\n");
+        }
         int *idx=idxs+(int64_t)s*K; float *w=ws+(int64_t)s*K;
         int Ksel = g_topk>0 ? (g_topk<K?g_topk:K) : K;
         for(int kk=0;kk<Ksel;kk++){ int best=-1; float bv=-1e30f;
@@ -3652,9 +3675,31 @@ static void run_text(Model *m, const char *snap, const char *prompt, int ngen){
     grammar_setup(&T);                   /* metodo F: GRAMMAR=file.gbnf (#48) */
     if(g_temp<0) g_temp=0.7f;            /* auto: 0.7, NON l'1.0 ufficiale — la coda della
                                           * distribuzione int4 e' rumore di quantizzazione */
-    int cap=(int)strlen(prompt)+16; int *pids=malloc(cap*sizeof(int));
-    int np=tok_encode(&T,prompt,(int)strlen(prompt),pids,cap);
-    if(np<1){ fprintf(stderr,"prompt is empty after tokenization\n"); return; }
+    int np; int *pids;
+    const char *idsf=getenv("PROBE_IDS");
+    if(idsf){
+        /* Raw token-id list, bypassing tokenizer AND template entirely: the
+         * cross-engine probe's contract is the integer id list (colibri#119),
+         * so tokenizer/template drift cannot confound the comparison. File
+         * format: JSON array of ints, or whitespace/comma-separated ints. */
+        FILE *pf=fopen(idsf,"r");
+        if(!pf){ fprintf(stderr,"PROBE_IDS: cannot open %s\n",idsf); return; }
+        int capi=8192; pids=malloc(capi*sizeof(int)); np=0; int ch,v=0,in=0,neg=0;
+        while((ch=fgetc(pf))!=EOF){
+            if(ch>='0'&&ch<='9'){ v=v*10+(ch-'0'); in=1; }
+            else if(ch=='-'&&!in){ neg=1; }
+            else { if(in){ if(np>=capi){capi*=2; pids=realloc(pids,capi*sizeof(int));}
+                           pids[np++]=neg?-v:v; } v=0; in=0; neg=0; }
+        }
+        if(in) pids[np++]=neg?-v:v;
+        fclose(pf);
+        if(np<1){ fprintf(stderr,"PROBE_IDS: no ids parsed from %s\n",idsf); return; }
+        fprintf(stderr,"[PROBE] %d raw token ids from %s (tokenizer/template bypassed)\n",np,idsf);
+    } else {
+        int cap=(int)strlen(prompt)+16; pids=malloc(cap*sizeof(int));
+        np=tok_encode(&T,prompt,(int)strlen(prompt),pids,cap);
+        if(np<1){ fprintf(stderr,"prompt is empty after tokenization\n"); return; }
+    }
     printf("prompt: %d tokens | generating up to %d (EOS stop=%d) | n-gram draft=%d\n", np, ngen, eos, g_draft);
     fputs(prompt,stdout); fflush(stdout);
     kv_alloc(m, np+ngen+g_draft+2);
@@ -4830,10 +4875,18 @@ int main(int argc, char **argv){
     /* modo serve persistente per la CLI 'ili': SERVE=1 */
     if(getenv("SERVE")){ run_serve(&m, snap); if(stats) stats_dump(&m,stats); return 0; }
 
-    /* modo testo reale: PROMPT="..." [NGEN=n] -> tokenizza, genera, detokenizza */
-    if(getenv("PROMPT")){
+    /* modo testo reale: PROMPT="..." [NGEN=n] -> tokenizza, genera, detokenizza.
+     * PROBE_IDS=<file> feeds raw token ids instead (run_text handles the bypass);
+     * PROBE_TRACE=<path> dumps per-(layer,pos) top-16 selection for colibri#119. */
+    if(getenv("PROMPT")||getenv("PROBE_IDS")){
+        if(getenv("PROBE_TRACE")){
+            g_probe_fp=fopen(getenv("PROBE_TRACE"),"w");
+            if(!g_probe_fp){ fprintf(stderr,"PROBE_TRACE: cannot open %s\n",getenv("PROBE_TRACE")); return 1; }
+            fprintf(stderr,"[PROBE] routing trace -> %s\n",getenv("PROBE_TRACE"));
+        }
         int ngen=getenv("NGEN")?atoi(getenv("NGEN")):64;
-        run_text(&m, snap, getenv("PROMPT"), ngen);
+        run_text(&m, snap, getenv("PROMPT")?getenv("PROMPT"):"", ngen);
+        if(g_probe_fp){ fclose(g_probe_fp); g_probe_fp=NULL; }
         if(stats) stats_dump(&m,stats);
         return 0;
     }
